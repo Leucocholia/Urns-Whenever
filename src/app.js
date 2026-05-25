@@ -115,7 +115,8 @@ run_for 40`,
     outputMeta: document.getElementById("output-meta"),
     stateCaption: document.getElementById("state-caption"),
     stateSnapshot: document.getElementById("state-snapshot"),
-    outputChart: document.getElementById("output-chart"),
+    marginalChart: document.getElementById("marginal-chart"),
+    sumChart: document.getElementById("sum-chart"),
   };
 
   let lastProgram = null;
@@ -192,10 +193,16 @@ run_for 40`,
       program,
       seed: nodes.seed.value,
       completedCount: 0,
-      histogram: new Map(),
-      overflow: {
-        count: 0,
-        values: program.outputNames.map(() => 0),
+      outputDistributions: program.outputNames.map(() => ({
+        bins: new Map(),
+        overflow: 0,
+      })),
+      sumDistribution: {
+        bins: new Map(),
+        overflow: {
+          count: 0,
+          compositionTotals: program.outputNames.map(() => 0),
+        },
       },
       currentRunIndex: 0,
       currentRun: null,
@@ -204,7 +211,7 @@ run_for 40`,
 
     loadRun(0);
     renderCurrentFrame();
-    drawOutputChart();
+    drawDistributionCharts();
     if (autoplay) play();
   }
 
@@ -254,7 +261,7 @@ run_for 40`,
   function finishCurrentRun() {
     if (!simulation || !simulation.currentRun) return;
     recordCompletedRun(simulation.currentRun);
-    drawOutputChart();
+    drawDistributionCharts();
 
     const nextRun = simulation.currentRunIndex + 1;
     loadRun(nextRun);
@@ -307,7 +314,8 @@ run_for 40`,
     nodes.outputMeta.textContent = "";
     nodes.stateCaption.textContent = "";
     nodes.stateSnapshot.replaceChildren();
-    drawEmptyOutputChart("No completed runs");
+    drawEmptyChart(nodes.marginalChart, "No completed runs");
+    drawEmptyChart(nodes.sumChart, "No completed runs");
   }
 
   function renderStateUrns(state, outputNames) {
@@ -355,47 +363,146 @@ run_for 40`,
   function recordCompletedRun(run) {
     if (!simulation) return;
     const values = simulation.program.outputNames.map((name) => Number(run.outputs[name] || 0));
-    const key = values.map(formatNumber).join(",");
     simulation.completedCount += 1;
 
-    if (simulation.histogram.has(key)) {
-      simulation.histogram.get(key).count += 1;
+    values.forEach((value, index) => {
+      recordOutputValue(index, value);
+    });
+    recordOutputSum(values);
+  }
+
+  function recordOutputValue(outputIndex, value) {
+    const distribution = simulation.outputDistributions[outputIndex];
+    const key = bucketKey(value);
+    if (distribution.bins.has(key)) {
+      distribution.bins.get(key).count += 1;
       return;
     }
-
-    if (simulation.histogram.size < MAX_HISTOGRAM_BUCKETS) {
-      simulation.histogram.set(key, {
-        values,
-        label: values.map(formatNumber).join(","),
+    if (distribution.bins.size < MAX_HISTOGRAM_BUCKETS) {
+      distribution.bins.set(key, {
+        value,
+        label: formatNumber(value),
         count: 1,
       });
       return;
     }
+    distribution.overflow += 1;
+  }
 
-    simulation.overflow.count += 1;
+  function recordOutputSum(values) {
+    const sum = values.reduce((total, value) => total + value, 0);
+    const key = bucketKey(sum);
+    const distribution = simulation.sumDistribution;
+    if (!distribution.bins.has(key)) {
+      if (distribution.bins.size < MAX_HISTOGRAM_BUCKETS) {
+        distribution.bins.set(key, {
+          value: sum,
+          label: formatNumber(sum),
+          count: 0,
+          compositionTotals: simulation.program.outputNames.map(() => 0),
+        });
+      } else {
+        distribution.overflow.count += 1;
+        values.forEach((value, index) => {
+          distribution.overflow.compositionTotals[index] += Math.abs(value);
+        });
+        return;
+      }
+    }
+    const bucket = distribution.bins.get(key);
+    bucket.count += 1;
     values.forEach((value, index) => {
-      simulation.overflow.values[index] += Math.abs(value);
+      bucket.compositionTotals[index] += Math.abs(value);
     });
   }
 
-  function drawOutputChart() {
+  function drawDistributionCharts() {
     if (!simulation || simulation.completedCount === 0) {
-      drawEmptyOutputChart("No completed runs");
+      drawEmptyChart(nodes.marginalChart, "No completed runs");
+      drawEmptyChart(nodes.sumChart, "No completed runs");
       return;
     }
+    drawMarginalChart();
+    drawSumChart();
+    const overflow = totalOverflowCount();
+    nodes.outputMeta.textContent = `${simulation.completedCount.toLocaleString()} completed run${simulation.completedCount === 1 ? "" : "s"}${overflow > 0 ? `, ${overflow.toLocaleString()} overflowed observation${overflow === 1 ? "" : "s"}` : ""}`;
+  }
 
-    const canvas = nodes.outputChart;
+  function drawMarginalChart() {
+    const canvas = nodes.marginalChart;
     const ctx = canvas.getContext("2d");
     const width = canvas.width;
     const height = canvas.height;
-    const inset = { left: 42, right: 18, top: 20, bottom: 36 };
+    const inset = { left: 42, right: 18, top: 18, bottom: 36 };
     const plotWidth = width - inset.left - inset.right;
     const plotHeight = height - inset.top - inset.bottom;
-    const visibleBuckets = histogramBuckets();
-    const maxCount = Math.max(1, ...visibleBuckets.map((bucket) => bucket.count));
-    const barGap = visibleBuckets.length > 45 ? 2 : 5;
-    const barWidth = Math.max(3, (plotWidth - barGap * Math.max(0, visibleBuckets.length - 1)) / visibleBuckets.length);
+    const buckets = marginalBuckets();
+    const maxCount = Math.max(1, ...buckets.flatMap((bucket) => bucket.counts));
+    const slotWidth = plotWidth / Math.max(1, buckets.length);
+    const groupCount = Math.max(1, simulation.program.outputNames.length);
+    const barWidth = Math.max(2, Math.min(18, (slotWidth * 0.78) / groupCount));
+    const labelEvery = Math.max(1, Math.ceil(buckets.length / 10));
 
+    drawChartFrame(ctx, width, height, inset);
+    buckets.forEach((bucket, bucketIndex) => {
+      const slotStart = inset.left + bucketIndex * slotWidth;
+      const groupWidth = barWidth * groupCount;
+      const baseX = slotStart + (slotWidth - groupWidth) / 2;
+      bucket.counts.forEach((count, outputIndex) => {
+        const barHeight = count / maxCount * plotHeight;
+        const x = baseX + outputIndex * barWidth;
+        const y = inset.top + plotHeight - barHeight;
+        ctx.globalAlpha = 0.82;
+        ctx.fillStyle = outputColor(outputIndex);
+        ctx.fillRect(x, y, barWidth, barHeight);
+        ctx.globalAlpha = 1;
+      });
+      if (bucketIndex % labelEvery === 0 || bucketIndex === buckets.length - 1) {
+        ctx.fillStyle = "#687386";
+        ctx.font = "12px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(bucket.label, slotStart + slotWidth / 2, inset.top + plotHeight + 22);
+      }
+    });
+    drawYAxisLabels(ctx, inset, plotHeight, maxCount);
+  }
+
+  function drawSumChart() {
+    const canvas = nodes.sumChart;
+    const ctx = canvas.getContext("2d");
+    const width = canvas.width;
+    const height = canvas.height;
+    const inset = { left: 42, right: 18, top: 18, bottom: 36 };
+    const plotWidth = width - inset.left - inset.right;
+    const plotHeight = height - inset.top - inset.bottom;
+    const buckets = sumBuckets();
+    const maxCount = Math.max(1, ...buckets.map((bucket) => bucket.count));
+    const barGap = buckets.length > 45 ? 2 : 5;
+    const barWidth = Math.max(3, (plotWidth - barGap * Math.max(0, buckets.length - 1)) / Math.max(1, buckets.length));
+    const labelEvery = Math.max(1, Math.ceil(buckets.length / 10));
+
+    drawChartFrame(ctx, width, height, inset);
+    buckets.forEach((bucket, bucketIndex) => {
+      const x = inset.left + bucketIndex * (barWidth + barGap);
+      const barHeight = bucket.count / maxCount * plotHeight;
+      let y = inset.top + plotHeight;
+      bucketComposition(bucket.compositionTotals).forEach((segment) => {
+        const segmentHeight = barHeight * segment.share;
+        y -= segmentHeight;
+        ctx.fillStyle = outputColor(segment.index);
+        ctx.fillRect(x, y, barWidth, segmentHeight);
+      });
+      if (bucketIndex % labelEvery === 0 || bucketIndex === buckets.length - 1) {
+        ctx.fillStyle = "#687386";
+        ctx.font = "12px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(bucket.label, x + barWidth / 2, inset.top + plotHeight + 22);
+      }
+    });
+    drawYAxisLabels(ctx, inset, plotHeight, maxCount);
+  }
+
+  function drawChartFrame(ctx, width, height, inset) {
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);
@@ -403,75 +510,85 @@ run_for 40`,
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(inset.left, inset.top);
-    ctx.lineTo(inset.left, inset.top + plotHeight);
-    ctx.lineTo(inset.left + plotWidth, inset.top + plotHeight);
+    ctx.lineTo(inset.left, height - inset.bottom);
+    ctx.lineTo(width - inset.right, height - inset.bottom);
     ctx.stroke();
+  }
 
-    visibleBuckets.forEach((bucket, bucketIndex) => {
-      const x = inset.left + bucketIndex * (barWidth + barGap);
-      const barHeight = bucket.count / maxCount * plotHeight;
-      let y = inset.top + plotHeight;
-      bucketComposition(bucket.values).forEach((segment) => {
-        const segmentHeight = barHeight * segment.share;
-        y -= segmentHeight;
-        ctx.fillStyle = outputColor(segment.index);
-        ctx.fillRect(x, y, barWidth, segmentHeight);
-      });
-    });
-
+  function drawYAxisLabels(ctx, inset, plotHeight, maxCount) {
     ctx.fillStyle = "#687386";
     ctx.font = "13px system-ui, sans-serif";
     ctx.textAlign = "right";
     ctx.fillText(String(maxCount), inset.left - 8, inset.top + 5);
     ctx.fillText("0", inset.left - 8, inset.top + plotHeight + 4);
-    ctx.textAlign = "center";
-    ctx.font = "12px system-ui, sans-serif";
-    const labelEvery = Math.max(1, Math.ceil(visibleBuckets.length / 10));
-    visibleBuckets.forEach((bucket, index) => {
-      if (index % labelEvery !== 0 && index !== visibleBuckets.length - 1) return;
-      const x = inset.left + index * (barWidth + barGap) + barWidth / 2;
-      ctx.fillText(bucket.label, x, inset.top + plotHeight + 22);
-    });
-
-    nodes.outputMeta.textContent = `${visibleBuckets.length.toLocaleString()} bin${visibleBuckets.length === 1 ? "" : "s"} from ${simulation.completedCount.toLocaleString()} completed run${simulation.completedCount === 1 ? "" : "s"}${simulation.overflow.count > 0 ? `, ${simulation.overflow.count.toLocaleString()} in other` : ""}`;
   }
 
-  function histogramBuckets() {
-    const buckets = Array.from(simulation.histogram.values()).sort(compareBucketValues);
-    if (simulation.overflow.count > 0) {
+  function marginalBuckets() {
+    const buckets = new Map();
+    simulation.outputDistributions.forEach((distribution, outputIndex) => {
+      distribution.bins.forEach((bucket, key) => {
+        if (!buckets.has(key)) {
+          buckets.set(key, {
+            value: bucket.value,
+            label: bucket.label,
+            counts: simulation.program.outputNames.map(() => 0),
+          });
+        }
+        buckets.get(key).counts[outputIndex] = bucket.count;
+      });
+      if (distribution.overflow > 0) {
+        if (!buckets.has("other")) {
+          buckets.set("other", {
+            value: Number.POSITIVE_INFINITY,
+            label: "other",
+            counts: simulation.program.outputNames.map(() => 0),
+          });
+        }
+        buckets.get("other").counts[outputIndex] = distribution.overflow;
+      }
+    });
+    return Array.from(buckets.values()).sort(compareBucketValues);
+  }
+
+  function sumBuckets() {
+    const buckets = Array.from(simulation.sumDistribution.bins.values()).sort(compareBucketValues);
+    if (simulation.sumDistribution.overflow.count > 0) {
       buckets.push({
-        values: simulation.overflow.values.slice(),
+        value: Number.POSITIVE_INFINITY,
         label: "other",
-        count: simulation.overflow.count,
-        overflow: true,
+        count: simulation.sumDistribution.overflow.count,
+        compositionTotals: simulation.sumDistribution.overflow.compositionTotals.slice(),
       });
     }
     return buckets;
   }
 
   function compareBucketValues(a, b) {
-    const length = Math.max(a.values.length, b.values.length);
-    for (let index = 0; index < length; index += 1) {
-      const left = a.values[index] || 0;
-      const right = b.values[index] || 0;
-      if (left !== right) return left - right;
-    }
-    return 0;
+    const left = Number.isFinite(a.value) ? a.value : Number.POSITIVE_INFINITY;
+    const right = Number.isFinite(b.value) ? b.value : Number.POSITIVE_INFINITY;
+    if (left !== right) return left - right;
+    return String(a.label).localeCompare(String(b.label));
   }
 
-  function bucketComposition(values) {
-    const weights = values.map((value) => Math.abs(Number(value) || 0));
+  function totalOverflowCount() {
+    const marginalOverflow = simulation.outputDistributions.reduce((sum, distribution) => {
+      return sum + distribution.overflow;
+    }, 0);
+    return marginalOverflow + simulation.sumDistribution.overflow.count;
+  }
+
+  function bucketComposition(compositionTotals) {
+    const weights = compositionTotals.map((value) => Math.abs(Number(value) || 0));
     const total = weights.reduce((sum, value) => sum + value, 0);
     if (total <= 0) {
-      return values.map((_, index) => ({ index, share: 1 / Math.max(1, values.length) }));
+      return compositionTotals.map((_, index) => ({ index, share: 1 / Math.max(1, compositionTotals.length) }));
     }
     return weights
       .map((weight, index) => ({ index, share: weight / total }))
       .filter((segment) => segment.share > 0);
   }
 
-  function drawEmptyOutputChart(text) {
-    const canvas = nodes.outputChart;
+  function drawEmptyChart(canvas, text) {
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = "#ffffff";
@@ -486,20 +603,16 @@ run_for 40`,
     return OUTPUT_COLORS[index % OUTPUT_COLORS.length];
   }
 
+  function bucketKey(value) {
+    return formatNumber(value);
+  }
+
   function shadeColor(hex, amount) {
     const value = Number.parseInt(hex.replace("#", ""), 16);
     const r = Math.max(0, Math.min(255, (value >> 16) + amount));
     const g = Math.max(0, Math.min(255, ((value >> 8) & 255) + amount));
     const b = Math.max(0, Math.min(255, (value & 255) + amount));
     return `rgb(${r}, ${g}, ${b})`;
-  }
-
-  function escapeHtml(text) {
-    return String(text)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
   }
 
   function formatNumber(value) {

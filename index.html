@@ -64,12 +64,21 @@
               <div id="state-snapshot" class="urn-state" aria-live="polite"></div>
             </section>
 
-            <section class="panel outputs-panel" aria-label="Completed run outputs">
+            <section class="panel outputs-panel" aria-label="Completed run distributions">
               <div class="pane-heading">
-                <h2>Output History</h2>
+                <h2>Distributions</h2>
                 <span id="output-meta" class="subtle"></span>
               </div>
-              <canvas id="output-chart" width="900" height="420" role="img" aria-label="Histogram of completed run output tuples"></canvas>
+              <div class="chart-stack">
+                <div class="chart-block">
+                  <div class="chart-title">Outputs</div>
+                  <canvas id="marginal-chart" width="900" height="310" role="img" aria-label="Marginal histogram for each output variable"></canvas>
+                </div>
+                <div class="chart-block">
+                  <div class="chart-title">Sum</div>
+                  <canvas id="sum-chart" width="900" height="310" role="img" aria-label="Stacked histogram of total output size"></canvas>
+                </div>
+              </div>
             </section>
           </div>
         </section>

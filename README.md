@@ -61,7 +61,8 @@ The output interface is a small playback surface:
 - Play and pause buttons with an FPS slider.
 - An unlabeled circle-stack view of the current run's output variables, ordered exactly as listed in `outputs:`.
 - Indefinite repeated runs while playback is active.
-- A histogram that updates after every completed run, with bins keyed by the output tuple in `outputs:` order.
+- A marginal distribution chart that updates after every completed run, with one color per output variable and numeric bins for each variable's final count.
+- A stacked sum distribution chart that bins the total output size and shades each bar by the output variables' contribution.
 - Bounded internal storage: the app keeps aggregate histogram counts, the current run, and a capped bucket set with excess outcomes rolled into `other`.
 
 ## Examples
