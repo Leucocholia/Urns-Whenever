@@ -60,7 +60,9 @@ The output interface is a small playback surface:
 
 - Play and pause buttons with an FPS slider.
 - An unlabeled circle-stack view of the current run's output variables, ordered exactly as listed in `outputs:`.
+- Indefinite repeated runs while playback is active.
 - A histogram that updates after every completed run, with bins keyed by the output tuple in `outputs:` order.
+- Bounded internal storage: the app keeps aggregate histogram counts, the current run, and a capped bucket set with excess outcomes rolled into `other`.
 
 ## Examples
 

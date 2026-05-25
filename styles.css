@@ -239,7 +239,7 @@ code {
 
 .controls-grid {
   display: grid;
-  grid-template-columns: minmax(100px, 0.8fr) minmax(140px, 1.2fr) minmax(140px, 1fr) minmax(72px, 0.5fr) minmax(160px, 1fr);
+  grid-template-columns: minmax(140px, 1.2fr) minmax(140px, 1fr) minmax(72px, 0.5fr) minmax(160px, 1fr);
   gap: 10px;
   align-items: end;
   margin-bottom: 12px;

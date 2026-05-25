@@ -3,10 +3,10 @@
 
   const W = window.Whichever;
   const OUTPUT_COLORS = ["#0f766e", "#2563eb", "#b45309", "#be123c", "#64748b", "#7c3aed"];
+  const MAX_HISTOGRAM_BUCKETS = 120;
 
   const examples = {
     "Coin flips": {
-      runs: 20,
       fps: 2,
       source: `presets:
   heads: 1
@@ -27,7 +27,6 @@ tails:
 run_for 10`,
     },
     "Fibonacci 5": {
-      runs: 1,
       fps: 2,
       source: `presets:
   n_left: 5
@@ -45,7 +44,6 @@ n_left:
 run_until (n_left == 0)`,
     },
     "Biased coin": {
-      runs: 40,
       fps: 6,
       source: `presets:
   heads: 3
@@ -66,7 +64,6 @@ tails:
 run_for 12`,
     },
     "Polya urn": {
-      runs: 30,
       fps: 8,
       source: `presets:
   red: 1
@@ -85,7 +82,6 @@ blue:
 run_for 30`,
     },
     "Random walk": {
-      runs: 60,
       fps: 10,
       source: `presets:
   left: 1
@@ -110,7 +106,6 @@ run_for 40`,
     playButton: document.getElementById("play-button"),
     pauseButton: document.getElementById("pause-button"),
     editor: document.getElementById("source-editor"),
-    runs: document.getElementById("runs-input"),
     seed: document.getElementById("seed-input"),
     fps: document.getElementById("fps-input"),
     fpsReadout: document.getElementById("fps-readout"),
@@ -139,7 +134,6 @@ run_for 40`,
     nodes.playButton.addEventListener("click", play);
     nodes.pauseButton.addEventListener("click", pause);
     nodes.editor.addEventListener("input", debounce(() => resetSimulation(false), 240));
-    nodes.runs.addEventListener("change", () => resetSimulation(false));
     nodes.seed.addEventListener("change", () => resetSimulation(false));
     nodes.fps.addEventListener("input", () => {
       renderFps();
@@ -155,7 +149,6 @@ run_for 40`,
   function loadExample(name, autoplay) {
     const example = examples[name];
     nodes.editor.value = example.source;
-    nodes.runs.value = example.runs;
     nodes.fps.value = example.fps;
     renderFps();
     resetSimulation(autoplay);
@@ -167,12 +160,6 @@ run_for 40`,
       window.clearTimeout(timer);
       timer = window.setTimeout(fn, delay);
     };
-  }
-
-  function clampNumber(input, fallback, min, max) {
-    const value = Math.floor(Number(input.value));
-    if (!Number.isFinite(value)) return fallback;
-    return Math.min(max, Math.max(min, value));
   }
 
   function parseCurrentProgram() {
@@ -201,17 +188,18 @@ run_for 40`,
 
     if (program.errors.length > 0) return;
 
-    const totalRuns = clampNumber(nodes.runs, 20, 1, 50000);
-    nodes.runs.value = totalRuns;
     simulation = {
       program,
-      totalRuns,
       seed: nodes.seed.value,
-      completed: [],
+      completedCount: 0,
+      histogram: new Map(),
+      overflow: {
+        count: 0,
+        values: program.outputNames.map(() => 0),
+      },
       currentRunIndex: 0,
       currentRun: null,
       frameIndex: 0,
-      complete: false,
     };
 
     loadRun(0);
@@ -221,7 +209,7 @@ run_for 40`,
   }
 
   function loadRun(index) {
-    if (!simulation || index >= simulation.totalRuns) return;
+    if (!simulation) return;
     simulation.currentRunIndex = index;
     simulation.frameIndex = 0;
     simulation.currentRun = W.runOne(simulation.program, {
@@ -234,7 +222,6 @@ run_for 40`,
 
   function play() {
     if (!simulation) resetSimulation(false);
-    if (simulation && simulation.complete) resetSimulation(false);
     if (!simulation || playbackTimer) return;
     nodes.playButton.disabled = true;
     nodes.pauseButton.disabled = false;
@@ -266,17 +253,10 @@ run_for 40`,
 
   function finishCurrentRun() {
     if (!simulation || !simulation.currentRun) return;
-    simulation.completed.push(simulation.currentRun);
+    recordCompletedRun(simulation.currentRun);
     drawOutputChart();
 
     const nextRun = simulation.currentRunIndex + 1;
-    if (nextRun >= simulation.totalRuns) {
-      nodes.runMeta.textContent = `Complete: ${simulation.totalRuns.toLocaleString()} run${simulation.totalRuns === 1 ? "" : "s"}`;
-      simulation.complete = true;
-      pause();
-      return;
-    }
-
     loadRun(nextRun);
     renderCurrentFrame();
   }
@@ -296,7 +276,7 @@ run_for 40`,
     const entry = frames[Math.min(simulation.frameIndex, frames.length - 1)];
     if (!entry) return;
 
-    nodes.runMeta.textContent = `Run ${(simulation.currentRunIndex + 1).toLocaleString()} of ${simulation.totalRuns.toLocaleString()}`;
+    nodes.runMeta.textContent = `Run ${(simulation.currentRunIndex + 1).toLocaleString()}`;
     nodes.stateCaption.textContent = entry.index === 0
       ? `Run ${simulation.currentRunIndex + 1}: initial state`
       : `Run ${simulation.currentRunIndex + 1}, draw ${entry.step}: ${entry.drawn}`;
@@ -372,8 +352,34 @@ run_for 40`,
     return node;
   }
 
+  function recordCompletedRun(run) {
+    if (!simulation) return;
+    const values = simulation.program.outputNames.map((name) => Number(run.outputs[name] || 0));
+    const key = values.map(formatNumber).join(",");
+    simulation.completedCount += 1;
+
+    if (simulation.histogram.has(key)) {
+      simulation.histogram.get(key).count += 1;
+      return;
+    }
+
+    if (simulation.histogram.size < MAX_HISTOGRAM_BUCKETS) {
+      simulation.histogram.set(key, {
+        values,
+        label: values.map(formatNumber).join(","),
+        count: 1,
+      });
+      return;
+    }
+
+    simulation.overflow.count += 1;
+    values.forEach((value, index) => {
+      simulation.overflow.values[index] += Math.abs(value);
+    });
+  }
+
   function drawOutputChart() {
-    if (!simulation || simulation.completed.length === 0) {
+    if (!simulation || simulation.completedCount === 0) {
       drawEmptyOutputChart("No completed runs");
       return;
     }
@@ -385,11 +391,7 @@ run_for 40`,
     const inset = { left: 42, right: 18, top: 20, bottom: 36 };
     const plotWidth = width - inset.left - inset.right;
     const plotHeight = height - inset.top - inset.bottom;
-    const histogram = outputHistogram(simulation.completed, simulation.program.outputNames);
-    const maxBuckets = 90;
-    const visibleBuckets = histogram.length > maxBuckets
-      ? histogram.slice().sort((a, b) => b.count - a.count).slice(0, maxBuckets).sort(compareBucketValues)
-      : histogram;
+    const visibleBuckets = histogramBuckets();
     const maxCount = Math.max(1, ...visibleBuckets.map((bucket) => bucket.count));
     const barGap = visibleBuckets.length > 45 ? 2 : 5;
     const barWidth = Math.max(3, (plotWidth - barGap * Math.max(0, visibleBuckets.length - 1)) / visibleBuckets.length);
@@ -431,25 +433,20 @@ run_for 40`,
       ctx.fillText(bucket.label, x, inset.top + plotHeight + 22);
     });
 
-    const hidden = histogram.length - visibleBuckets.length;
-    nodes.outputMeta.textContent = `${visibleBuckets.length.toLocaleString()} bin${visibleBuckets.length === 1 ? "" : "s"} from ${simulation.completed.length.toLocaleString()} of ${simulation.totalRuns.toLocaleString()} run${simulation.totalRuns === 1 ? "" : "s"}${hidden > 0 ? `, top ${visibleBuckets.length} shown` : ""}`;
+    nodes.outputMeta.textContent = `${visibleBuckets.length.toLocaleString()} bin${visibleBuckets.length === 1 ? "" : "s"} from ${simulation.completedCount.toLocaleString()} completed run${simulation.completedCount === 1 ? "" : "s"}${simulation.overflow.count > 0 ? `, ${simulation.overflow.count.toLocaleString()} in other` : ""}`;
   }
 
-  function outputHistogram(runs, outputNames) {
-    const buckets = new Map();
-    runs.forEach((run) => {
-      const values = outputNames.map((name) => Number(run.outputs[name] || 0));
-      const key = values.map(formatNumber).join(",");
-      if (!buckets.has(key)) {
-        buckets.set(key, {
-          values,
-          label: values.map(formatNumber).join(","),
-          count: 0,
-        });
-      }
-      buckets.get(key).count += 1;
-    });
-    return Array.from(buckets.values()).sort(compareBucketValues);
+  function histogramBuckets() {
+    const buckets = Array.from(simulation.histogram.values()).sort(compareBucketValues);
+    if (simulation.overflow.count > 0) {
+      buckets.push({
+        values: simulation.overflow.values.slice(),
+        label: "other",
+        count: simulation.overflow.count,
+        overflow: true,
+      });
+    }
+    return buckets;
   }
 
   function compareBucketValues(a, b) {
