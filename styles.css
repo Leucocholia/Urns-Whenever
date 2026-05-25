@@ -393,6 +393,79 @@ th {
   padding: 10px;
 }
 
+.conditional-panel[hidden] {
+  display: none;
+}
+
+.conditional-panel {
+  overflow: hidden;
+  border: 1px solid var(--soft-line);
+  border-radius: 6px;
+  background: var(--paper);
+}
+
+.conditional-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border-bottom: 1px solid var(--soft-line);
+}
+
+.conditional-heading .chart-title {
+  padding: 0;
+  border: 0;
+}
+
+.conditional-title {
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.compact-button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+}
+
+.conditional-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  padding: 10px;
+}
+
+.conditional-chart-block {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--soft-line);
+  border-radius: 6px;
+}
+
+.conditional-chart-title {
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--soft-line);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.conditional-chart {
+  display: block;
+  width: 100%;
+  height: 180px;
+  padding: 8px;
+}
+
+.conditional-empty {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
 .trace-list {
   display: grid;
   gap: 8px;

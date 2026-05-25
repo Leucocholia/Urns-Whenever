@@ -4,6 +4,7 @@
   const W = window.Whichever;
   const OUTPUT_COLORS = ["#0f766e", "#2563eb", "#b45309", "#be123c", "#64748b", "#7c3aed"];
   const MAX_HISTOGRAM_BUCKETS = 120;
+  const MAX_CONDITIONAL_VALUE_BUCKETS = 80;
 
   const examples = {
     "Coin flips": {
@@ -117,11 +118,16 @@ run_for 40`,
     stateSnapshot: document.getElementById("state-snapshot"),
     marginalChart: document.getElementById("marginal-chart"),
     sumChart: document.getElementById("sum-chart"),
+    conditionalPanel: document.getElementById("conditional-panel"),
+    conditionalTitle: document.getElementById("conditional-title"),
+    conditionalClear: document.getElementById("conditional-clear"),
+    conditionalCharts: document.getElementById("conditional-charts"),
   };
 
   let lastProgram = null;
   let simulation = null;
   let playbackTimer = 0;
+  let marginalHitAreas = [];
 
   function init() {
     Object.keys(examples).forEach((name) => {
@@ -134,6 +140,12 @@ run_for 40`,
     nodes.exampleSelect.addEventListener("change", () => loadExample(nodes.exampleSelect.value, true));
     nodes.playButton.addEventListener("click", play);
     nodes.pauseButton.addEventListener("click", pause);
+    nodes.marginalChart.addEventListener("click", handleMarginalChartClick);
+    nodes.marginalChart.addEventListener("mousemove", handleMarginalChartHover);
+    nodes.marginalChart.addEventListener("mouseleave", () => {
+      nodes.marginalChart.style.cursor = "";
+    });
+    nodes.conditionalClear.addEventListener("click", clearConditionalSelection);
     nodes.editor.addEventListener("input", debounce(() => resetSimulation(false), 240));
     nodes.seed.addEventListener("change", () => resetSimulation(false));
     nodes.fps.addEventListener("input", () => {
@@ -197,6 +209,10 @@ run_for 40`,
         bins: new Map(),
         overflow: 0,
       })),
+      conditionalDistributions: program.outputNames.map(() => ({
+        bins: new Map(),
+        overflow: 0,
+      })),
       sumDistribution: {
         bins: new Map(),
         overflow: {
@@ -207,6 +223,7 @@ run_for 40`,
       currentRunIndex: 0,
       currentRun: null,
       frameIndex: 0,
+      selectedConditional: null,
     };
 
     loadRun(0);
@@ -316,6 +333,8 @@ run_for 40`,
     nodes.stateSnapshot.replaceChildren();
     drawEmptyChart(nodes.marginalChart, "No completed runs");
     drawEmptyChart(nodes.sumChart, "No completed runs");
+    marginalHitAreas = [];
+    hideConditionalPanel();
   }
 
   function renderStateUrns(state, outputNames) {
@@ -369,6 +388,7 @@ run_for 40`,
       recordOutputValue(index, value);
     });
     recordOutputSum(values);
+    recordConditionalValues(values);
   }
 
   function recordOutputValue(outputIndex, value) {
@@ -416,14 +436,62 @@ run_for 40`,
     });
   }
 
+  function recordConditionalValues(values) {
+    values.forEach((conditionValue, conditionIndex) => {
+      const distribution = simulation.conditionalDistributions[conditionIndex];
+      const key = bucketKey(conditionValue);
+      let conditionBucket = distribution.bins.get(key);
+      if (!conditionBucket) {
+        if (distribution.bins.size >= MAX_HISTOGRAM_BUCKETS) {
+          distribution.overflow += 1;
+          return;
+        }
+        conditionBucket = {
+          value: conditionValue,
+          label: formatNumber(conditionValue),
+          count: 0,
+          dependentDistributions: simulation.program.outputNames.map(() => ({
+            bins: new Map(),
+            overflow: 0,
+          })),
+        };
+        distribution.bins.set(key, conditionBucket);
+      }
+      conditionBucket.count += 1;
+      values.forEach((value, outputIndex) => {
+        if (outputIndex === conditionIndex) return;
+        recordConditionalDependentValue(conditionBucket.dependentDistributions[outputIndex], value);
+      });
+    });
+  }
+
+  function recordConditionalDependentValue(distribution, value) {
+    const key = bucketKey(value);
+    if (distribution.bins.has(key)) {
+      distribution.bins.get(key).count += 1;
+      return;
+    }
+    if (distribution.bins.size < MAX_CONDITIONAL_VALUE_BUCKETS) {
+      distribution.bins.set(key, {
+        value,
+        label: formatNumber(value),
+        count: 1,
+      });
+      return;
+    }
+    distribution.overflow += 1;
+  }
+
   function drawDistributionCharts() {
     if (!simulation || simulation.completedCount === 0) {
       drawEmptyChart(nodes.marginalChart, "No completed runs");
       drawEmptyChart(nodes.sumChart, "No completed runs");
+      renderConditionalPanel();
       return;
     }
     drawMarginalChart();
     drawSumChart();
+    renderConditionalPanel();
     const overflow = totalOverflowCount();
     nodes.outputMeta.textContent = `${simulation.completedCount.toLocaleString()} completed run${simulation.completedCount === 1 ? "" : "s"}${overflow > 0 ? `, ${overflow.toLocaleString()} overflowed observation${overflow === 1 ? "" : "s"}` : ""}`;
   }
@@ -442,7 +510,9 @@ run_for 40`,
     const groupCount = Math.max(1, simulation.program.outputNames.length);
     const barWidth = Math.max(2, Math.min(18, (slotWidth * 0.78) / groupCount));
     const labelEvery = Math.max(1, Math.ceil(buckets.length / 10));
+    const selected = simulation.selectedConditional;
 
+    marginalHitAreas = [];
     drawChartFrame(ctx, width, height, inset);
     buckets.forEach((bucket, bucketIndex) => {
       const slotStart = inset.left + bucketIndex * slotWidth;
@@ -456,6 +526,24 @@ run_for 40`,
         ctx.fillStyle = outputColor(outputIndex);
         ctx.fillRect(x, y, barWidth, barHeight);
         ctx.globalAlpha = 1;
+        if (count > 0 && bucket.key !== "other") {
+          const hitHeight = Math.max(4, barHeight);
+          marginalHitAreas.push({
+            left: x,
+            top: inset.top + plotHeight - hitHeight,
+            right: x + barWidth,
+            bottom: inset.top + plotHeight,
+            outputIndex,
+            key: bucket.key,
+            value: bucket.value,
+            label: bucket.label,
+          });
+        }
+        if (selected && selected.outputIndex === outputIndex && selected.key === bucket.key) {
+          ctx.strokeStyle = "#111827";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x - 2, y - 2, barWidth + 4, barHeight + 4);
+        }
       });
       if (bucketIndex % labelEvery === 0 || bucketIndex === buckets.length - 1) {
         ctx.fillStyle = "#687386";
@@ -523,12 +611,169 @@ run_for 40`,
     ctx.fillText("0", inset.left - 8, inset.top + plotHeight + 4);
   }
 
+  function handleMarginalChartClick(event) {
+    if (!simulation) return;
+    const hit = marginalHitAt(event);
+    if (!hit) {
+      clearConditionalSelection();
+      return;
+    }
+    simulation.selectedConditional = {
+      outputIndex: hit.outputIndex,
+      key: hit.key,
+      value: hit.value,
+      label: hit.label,
+    };
+    drawDistributionCharts();
+  }
+
+  function handleMarginalChartHover(event) {
+    nodes.marginalChart.style.cursor = marginalHitAt(event) ? "pointer" : "";
+  }
+
+  function marginalHitAt(event) {
+    const point = canvasPoint(nodes.marginalChart, event);
+    for (let index = marginalHitAreas.length - 1; index >= 0; index -= 1) {
+      const area = marginalHitAreas[index];
+      if (point.x >= area.left && point.x <= area.right && point.y >= area.top && point.y <= area.bottom) {
+        return area;
+      }
+    }
+    return null;
+  }
+
+  function canvasPoint(canvas, event) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left) * (canvas.width / rect.width),
+      y: (event.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  }
+
+  function clearConditionalSelection() {
+    if (!simulation || !simulation.selectedConditional) {
+      hideConditionalPanel();
+      return;
+    }
+    simulation.selectedConditional = null;
+    drawDistributionCharts();
+  }
+
+  function renderConditionalPanel() {
+    if (!simulation || !simulation.selectedConditional) {
+      hideConditionalPanel();
+      return;
+    }
+
+    const selected = simulation.selectedConditional;
+    const conditionBucket = conditionalBucket(selected.outputIndex, selected.key);
+    if (!conditionBucket) {
+      hideConditionalPanel();
+      return;
+    }
+
+    const conditionName = simulation.program.outputNames[selected.outputIndex];
+    nodes.conditionalPanel.hidden = false;
+    nodes.conditionalTitle.textContent = `Given ${conditionName} = ${conditionBucket.label} (${conditionBucket.count.toLocaleString()} run${conditionBucket.count === 1 ? "" : "s"})`;
+    nodes.conditionalCharts.replaceChildren();
+
+    const otherIndexes = simulation.program.outputNames
+      .map((_, index) => index)
+      .filter((index) => index !== selected.outputIndex);
+    if (otherIndexes.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "conditional-empty";
+      empty.textContent = "No other outputs";
+      nodes.conditionalCharts.appendChild(empty);
+      return;
+    }
+
+    otherIndexes.forEach((outputIndex) => {
+      const block = document.createElement("section");
+      block.className = "conditional-chart-block";
+
+      const title = document.createElement("div");
+      title.className = "conditional-chart-title";
+      title.textContent = simulation.program.outputNames[outputIndex];
+
+      const canvas = document.createElement("canvas");
+      canvas.className = "conditional-chart";
+      canvas.width = 420;
+      canvas.height = 180;
+      canvas.setAttribute("role", "img");
+      canvas.setAttribute("aria-label", `Conditional histogram for ${simulation.program.outputNames[outputIndex]}`);
+
+      block.appendChild(title);
+      block.appendChild(canvas);
+      nodes.conditionalCharts.appendChild(block);
+      drawConditionalChart(canvas, conditionBucket.dependentDistributions[outputIndex], outputIndex, conditionBucket.count);
+    });
+  }
+
+  function hideConditionalPanel() {
+    nodes.conditionalPanel.hidden = true;
+    nodes.conditionalTitle.textContent = "";
+    nodes.conditionalCharts.replaceChildren();
+  }
+
+  function conditionalBucket(outputIndex, key) {
+    const distribution = simulation.conditionalDistributions[outputIndex];
+    return distribution ? distribution.bins.get(key) : null;
+  }
+
+  function drawConditionalChart(canvas, distribution, outputIndex, sampleCount) {
+    const ctx = canvas.getContext("2d");
+    const width = canvas.width;
+    const height = canvas.height;
+    const inset = { left: 42, right: 14, top: 16, bottom: 34 };
+    const plotWidth = width - inset.left - inset.right;
+    const plotHeight = height - inset.top - inset.bottom;
+    const buckets = conditionalBuckets(distribution);
+    if (buckets.length === 0) {
+      drawEmptyChart(canvas, "No observations");
+      return;
+    }
+
+    const maxProbability = Math.max(0.01, ...buckets.map((bucket) => bucket.count / Math.max(1, sampleCount)));
+    const barGap = buckets.length > 28 ? 2 : 4;
+    const barWidth = Math.max(3, (plotWidth - barGap * Math.max(0, buckets.length - 1)) / Math.max(1, buckets.length));
+    const labelEvery = Math.max(1, Math.ceil(buckets.length / 7));
+
+    drawChartFrame(ctx, width, height, inset);
+    buckets.forEach((bucket, bucketIndex) => {
+      const probability = bucket.count / Math.max(1, sampleCount);
+      const barHeight = probability / maxProbability * plotHeight;
+      const x = inset.left + bucketIndex * (barWidth + barGap);
+      const y = inset.top + plotHeight - barHeight;
+      ctx.fillStyle = outputColor(outputIndex);
+      ctx.globalAlpha = bucket.label === "other" ? 0.58 : 0.88;
+      ctx.fillRect(x, y, barWidth, barHeight);
+      ctx.globalAlpha = 1;
+      if (bucketIndex % labelEvery === 0 || bucketIndex === buckets.length - 1) {
+        ctx.fillStyle = "#687386";
+        ctx.font = "11px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(bucket.label, x + barWidth / 2, inset.top + plotHeight + 21);
+      }
+    });
+    drawProbabilityYAxisLabels(ctx, inset, plotHeight, maxProbability);
+  }
+
+  function drawProbabilityYAxisLabels(ctx, inset, plotHeight, maxProbability) {
+    ctx.fillStyle = "#687386";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(formatPercent(maxProbability), inset.left - 8, inset.top + 5);
+    ctx.fillText("0", inset.left - 8, inset.top + plotHeight + 4);
+  }
+
   function marginalBuckets() {
     const buckets = new Map();
     simulation.outputDistributions.forEach((distribution, outputIndex) => {
       distribution.bins.forEach((bucket, key) => {
         if (!buckets.has(key)) {
           buckets.set(key, {
+            key,
             value: bucket.value,
             label: bucket.label,
             counts: simulation.program.outputNames.map(() => 0),
@@ -539,6 +784,7 @@ run_for 40`,
       if (distribution.overflow > 0) {
         if (!buckets.has("other")) {
           buckets.set("other", {
+            key: "other",
             value: Number.POSITIVE_INFINITY,
             label: "other",
             counts: simulation.program.outputNames.map(() => 0),
@@ -558,6 +804,18 @@ run_for 40`,
         label: "other",
         count: simulation.sumDistribution.overflow.count,
         compositionTotals: simulation.sumDistribution.overflow.compositionTotals.slice(),
+      });
+    }
+    return buckets;
+  }
+
+  function conditionalBuckets(distribution) {
+    const buckets = Array.from(distribution.bins.values()).sort(compareBucketValues);
+    if (distribution.overflow > 0) {
+      buckets.push({
+        value: Number.POSITIVE_INFINITY,
+        label: "other",
+        count: distribution.overflow,
       });
     }
     return buckets;
@@ -621,6 +879,12 @@ run_for 40`,
     if (Math.abs(number) >= 1000) return number.toLocaleString(undefined, { maximumFractionDigits: 2 });
     if (Number.isInteger(number)) return String(number);
     return number.toFixed(3).replace(/\.?0+$/, "");
+  }
+
+  function formatPercent(value) {
+    const percent = Number(value) * 100;
+    if (percent >= 10 || Number.isInteger(percent)) return `${Math.round(percent)}%`;
+    return `${percent.toFixed(1)}%`;
   }
 
   init();
