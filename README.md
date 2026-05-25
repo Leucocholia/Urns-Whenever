@@ -61,6 +61,8 @@ The output interface is a small playback surface:
 - Play and pause buttons with an FPS slider.
 - An unlabeled circle-stack view of the current run's output variables, ordered exactly as listed in `outputs:`.
 - Indefinite repeated runs while playback is active.
+- Per-output stream toggles for showing or hiding variables in the visualizations.
+- Histogram layout modes for stacked, shaded, or neighboring stream bars.
 - A marginal distribution chart that updates after every completed run, with one color per output variable and numeric bins for each variable's final count.
 - A click-to-inspect conditional view for an output bin, showing the probability distributions of the other outputs given that selected value.
 - A stacked sum distribution chart that bins the total output size and shades each bar by the output variables' contribution.

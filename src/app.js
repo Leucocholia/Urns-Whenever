@@ -5,6 +5,7 @@
   const OUTPUT_COLORS = ["#0f766e", "#2563eb", "#b45309", "#be123c", "#64748b", "#7c3aed"];
   const MAX_HISTOGRAM_BUCKETS = 120;
   const MAX_CONDITIONAL_VALUE_BUCKETS = 80;
+  const HISTOGRAM_MODES = new Set(["neighboring", "stacked", "shaded"]);
 
   const examples = {
     "Coin flips": {
@@ -116,6 +117,8 @@ run_for 40`,
     outputMeta: document.getElementById("output-meta"),
     stateCaption: document.getElementById("state-caption"),
     stateSnapshot: document.getElementById("state-snapshot"),
+    streamControls: document.getElementById("stream-controls"),
+    histogramModeControls: document.getElementById("histogram-mode-controls"),
     marginalChart: document.getElementById("marginal-chart"),
     sumChart: document.getElementById("sum-chart"),
     conditionalPanel: document.getElementById("conditional-panel"),
@@ -140,6 +143,8 @@ run_for 40`,
     nodes.exampleSelect.addEventListener("change", () => loadExample(nodes.exampleSelect.value, true));
     nodes.playButton.addEventListener("click", play);
     nodes.pauseButton.addEventListener("click", pause);
+    nodes.streamControls.addEventListener("change", handleStreamControlsChange);
+    nodes.histogramModeControls.addEventListener("change", handleHistogramModeChange);
     nodes.marginalChart.addEventListener("click", handleMarginalChartClick);
     nodes.marginalChart.addEventListener("mousemove", handleMarginalChartHover);
     nodes.marginalChart.addEventListener("mouseleave", () => {
@@ -205,6 +210,8 @@ run_for 40`,
       program,
       seed: nodes.seed.value,
       completedCount: 0,
+      visibleOutputs: program.outputNames.map(() => true),
+      histogramMode: currentHistogramMode(),
       outputDistributions: program.outputNames.map(() => ({
         bins: new Map(),
         overflow: 0,
@@ -226,6 +233,7 @@ run_for 40`,
       selectedConditional: null,
     };
 
+    renderOutputControls();
     loadRun(0);
     renderCurrentFrame();
     drawDistributionCharts();
@@ -331,15 +339,72 @@ run_for 40`,
     nodes.outputMeta.textContent = "";
     nodes.stateCaption.textContent = "";
     nodes.stateSnapshot.replaceChildren();
+    nodes.streamControls.replaceChildren();
     drawEmptyChart(nodes.marginalChart, "No completed runs");
     drawEmptyChart(nodes.sumChart, "No completed runs");
     marginalHitAreas = [];
     hideConditionalPanel();
   }
 
+  function renderOutputControls() {
+    nodes.streamControls.replaceChildren();
+    simulation.program.outputNames.forEach((name, index) => {
+      const label = document.createElement("label");
+      label.className = "stream-toggle";
+
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = isOutputVisible(index);
+      input.dataset.outputIndex = String(index);
+
+      const swatch = document.createElement("span");
+      swatch.className = "stream-swatch";
+      swatch.style.backgroundColor = outputColor(index);
+
+      const text = document.createElement("span");
+      text.className = "stream-name";
+      text.textContent = name;
+
+      label.appendChild(input);
+      label.appendChild(swatch);
+      label.appendChild(text);
+      nodes.streamControls.appendChild(label);
+    });
+  }
+
+  function handleStreamControlsChange(event) {
+    if (!simulation || event.target.type !== "checkbox") return;
+    const index = Number(event.target.dataset.outputIndex);
+    if (!Number.isInteger(index)) return;
+
+    simulation.visibleOutputs[index] = event.target.checked;
+    if (visibleOutputIndexes().length === 0) {
+      simulation.visibleOutputs[index] = true;
+      event.target.checked = true;
+    }
+    if (simulation.selectedConditional && !isOutputVisible(simulation.selectedConditional.outputIndex)) {
+      simulation.selectedConditional = null;
+    }
+    renderCurrentFrame();
+    drawDistributionCharts();
+  }
+
+  function handleHistogramModeChange(event) {
+    if (!simulation || event.target.name !== "histogram-mode" || !event.target.checked) return;
+    if (!HISTOGRAM_MODES.has(event.target.value)) return;
+    simulation.histogramMode = event.target.value;
+    drawDistributionCharts();
+  }
+
+  function currentHistogramMode() {
+    const selected = nodes.histogramModeControls.querySelector("input[name='histogram-mode']:checked");
+    return selected && HISTOGRAM_MODES.has(selected.value) ? selected.value : "neighboring";
+  }
+
   function renderStateUrns(state, outputNames) {
     nodes.stateSnapshot.replaceChildren();
     outputNames.forEach((name, index) => {
+      if (!isOutputVisible(index)) return;
       nodes.stateSnapshot.appendChild(createUrnNode(name, Number(state[name] || 0), index));
     });
   }
@@ -505,10 +570,17 @@ run_for 40`,
     const plotWidth = width - inset.left - inset.right;
     const plotHeight = height - inset.top - inset.bottom;
     const buckets = marginalBuckets();
-    const maxCount = Math.max(1, ...buckets.flatMap((bucket) => bucket.counts));
+    const visibleIndexes = visibleOutputIndexes();
+    if (visibleIndexes.length === 0 || buckets.length === 0) {
+      marginalHitAreas = [];
+      drawEmptyChart(canvas, "No visible outputs");
+      return;
+    }
+    const mode = simulation.histogramMode;
+    const maxCount = maxSeriesBucketValue(buckets, (bucket) => {
+      return visibleIndexes.map((index) => ({ index, value: bucket.counts[index] || 0 }));
+    }, mode);
     const slotWidth = plotWidth / Math.max(1, buckets.length);
-    const groupCount = Math.max(1, simulation.program.outputNames.length);
-    const barWidth = Math.max(2, Math.min(18, (slotWidth * 0.78) / groupCount));
     const labelEvery = Math.max(1, Math.ceil(buckets.length / 10));
     const selected = simulation.selectedConditional;
 
@@ -516,33 +588,34 @@ run_for 40`,
     drawChartFrame(ctx, width, height, inset);
     buckets.forEach((bucket, bucketIndex) => {
       const slotStart = inset.left + bucketIndex * slotWidth;
-      const groupWidth = barWidth * groupCount;
-      const baseX = slotStart + (slotWidth - groupWidth) / 2;
-      bucket.counts.forEach((count, outputIndex) => {
-        const barHeight = count / maxCount * plotHeight;
-        const x = baseX + outputIndex * barWidth;
-        const y = inset.top + plotHeight - barHeight;
-        ctx.globalAlpha = 0.82;
-        ctx.fillStyle = outputColor(outputIndex);
-        ctx.fillRect(x, y, barWidth, barHeight);
-        ctx.globalAlpha = 1;
-        if (count > 0 && bucket.key !== "other") {
-          const hitHeight = Math.max(4, barHeight);
+      const series = visibleIndexes
+        .map((index) => ({ index, value: bucket.counts[index] || 0 }))
+        .filter((item) => item.value > 0);
+      const rects = drawHistogramSeries(ctx, {
+        mode,
+        series,
+        slotStart,
+        slotWidth,
+        plotBottom: inset.top + plotHeight,
+        plotHeight,
+        maxValue: maxCount,
+      });
+      rects.forEach((rect) => {
+        if (bucket.key !== "other") {
+          const hitHeight = Math.max(4, rect.height);
           marginalHitAreas.push({
-            left: x,
-            top: inset.top + plotHeight - hitHeight,
-            right: x + barWidth,
-            bottom: inset.top + plotHeight,
-            outputIndex,
+            left: rect.x,
+            top: Math.max(inset.top, rect.y + rect.height - hitHeight),
+            right: rect.x + rect.width,
+            bottom: rect.y + rect.height,
+            outputIndex: rect.index,
             key: bucket.key,
             value: bucket.value,
             label: bucket.label,
           });
         }
-        if (selected && selected.outputIndex === outputIndex && selected.key === bucket.key) {
-          ctx.strokeStyle = "#111827";
-          ctx.lineWidth = 2;
-          ctx.strokeRect(x - 2, y - 2, barWidth + 4, barHeight + 4);
+        if (selected && selected.outputIndex === rect.index && selected.key === bucket.key) {
+          drawSelectedRect(ctx, rect);
         }
       });
       if (bucketIndex % labelEvery === 0 || bucketIndex === buckets.length - 1) {
@@ -564,30 +637,116 @@ run_for 40`,
     const plotWidth = width - inset.left - inset.right;
     const plotHeight = height - inset.top - inset.bottom;
     const buckets = sumBuckets();
-    const maxCount = Math.max(1, ...buckets.map((bucket) => bucket.count));
-    const barGap = buckets.length > 45 ? 2 : 5;
-    const barWidth = Math.max(3, (plotWidth - barGap * Math.max(0, buckets.length - 1)) / Math.max(1, buckets.length));
+    const visibleIndexes = visibleOutputIndexes();
+    if (visibleIndexes.length === 0 || buckets.length === 0) {
+      drawEmptyChart(canvas, "No visible outputs");
+      return;
+    }
+    const mode = simulation.histogramMode;
+    const maxCount = maxSeriesBucketValue(buckets, (bucket) => {
+      return compositionCountSeries(bucket).filter((item) => visibleIndexes.includes(item.index));
+    }, mode);
+    const slotWidth = plotWidth / Math.max(1, buckets.length);
     const labelEvery = Math.max(1, Math.ceil(buckets.length / 10));
 
     drawChartFrame(ctx, width, height, inset);
     buckets.forEach((bucket, bucketIndex) => {
-      const x = inset.left + bucketIndex * (barWidth + barGap);
-      const barHeight = bucket.count / maxCount * plotHeight;
-      let y = inset.top + plotHeight;
-      bucketComposition(bucket.compositionTotals).forEach((segment) => {
-        const segmentHeight = barHeight * segment.share;
-        y -= segmentHeight;
-        ctx.fillStyle = outputColor(segment.index);
-        ctx.fillRect(x, y, barWidth, segmentHeight);
+      const slotStart = inset.left + bucketIndex * slotWidth;
+      const series = compositionCountSeries(bucket)
+        .filter((item) => visibleIndexes.includes(item.index) && item.value > 0);
+      drawHistogramSeries(ctx, {
+        mode,
+        series,
+        slotStart,
+        slotWidth,
+        plotBottom: inset.top + plotHeight,
+        plotHeight,
+        maxValue: maxCount,
       });
       if (bucketIndex % labelEvery === 0 || bucketIndex === buckets.length - 1) {
         ctx.fillStyle = "#687386";
         ctx.font = "12px system-ui, sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText(bucket.label, x + barWidth / 2, inset.top + plotHeight + 22);
+        ctx.fillText(bucket.label, slotStart + slotWidth / 2, inset.top + plotHeight + 22);
       }
     });
     drawYAxisLabels(ctx, inset, plotHeight, maxCount);
+  }
+
+  function drawHistogramSeries(ctx, options) {
+    const { mode, series, slotStart, slotWidth, plotBottom, plotHeight, maxValue } = options;
+    const active = series.filter((item) => item.value > 0);
+    if (active.length === 0) return [];
+
+    if (mode === "stacked") {
+      const barWidth = Math.max(3, Math.min(30, slotWidth * 0.62));
+      const x = slotStart + (slotWidth - barWidth) / 2;
+      let y = plotBottom;
+      return active.map((item) => {
+        const height = item.value / maxValue * plotHeight;
+        y -= height;
+        drawBar(ctx, x, y, barWidth, height, item.index, 0.9);
+        return { index: item.index, x, y, width: barWidth, height };
+      });
+    }
+
+    if (mode === "shaded") {
+      const barWidth = Math.max(3, Math.min(34, slotWidth * 0.68));
+      const x = slotStart + (slotWidth - barWidth) / 2;
+      return active.map((item) => {
+        const height = item.value / maxValue * plotHeight;
+        const y = plotBottom - height;
+        drawBar(ctx, x, y, barWidth, height, item.index, 0.48);
+        return { index: item.index, x, y, width: barWidth, height };
+      });
+    }
+
+    const barWidth = Math.max(2, Math.min(18, (slotWidth * 0.78) / active.length));
+    const groupWidth = barWidth * active.length;
+    const baseX = slotStart + (slotWidth - groupWidth) / 2;
+    return active.map((item, index) => {
+      const height = item.value / maxValue * plotHeight;
+      const x = baseX + index * barWidth;
+      const y = plotBottom - height;
+      drawBar(ctx, x, y, barWidth, height, item.index, 0.82);
+      return { index: item.index, x, y, width: barWidth, height };
+    });
+  }
+
+  function drawBar(ctx, x, y, width, height, outputIndex, alpha) {
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = outputColor(outputIndex);
+    ctx.fillRect(x, y, width, height);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawSelectedRect(ctx, rect) {
+    ctx.strokeStyle = "#111827";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(rect.x - 2, rect.y - 2, rect.width + 4, rect.height + 4);
+  }
+
+  function maxSeriesBucketValue(buckets, seriesForBucket, mode) {
+    return Math.max(1, ...buckets.map((bucket) => {
+      const series = seriesForBucket(bucket).filter((item) => item.value > 0);
+      if (mode === "stacked") {
+        return series.reduce((sum, item) => sum + item.value, 0);
+      }
+      return Math.max(0, ...series.map((item) => item.value));
+    }));
+  }
+
+  function compositionCountSeries(bucket) {
+    const weights = bucket.compositionTotals.map((value) => Math.abs(Number(value) || 0));
+    const total = weights.reduce((sum, value) => sum + value, 0);
+    if (total <= 0) {
+      const share = bucket.count / Math.max(1, weights.length);
+      return weights.map((_, index) => ({ index, value: share }));
+    }
+    return weights.map((weight, index) => ({
+      index,
+      value: bucket.count * (weight / total),
+    }));
   }
 
   function drawChartFrame(ctx, width, height, inset) {
@@ -607,8 +766,19 @@ run_for 40`,
     ctx.fillStyle = "#687386";
     ctx.font = "13px system-ui, sans-serif";
     ctx.textAlign = "right";
-    ctx.fillText(String(maxCount), inset.left - 8, inset.top + 5);
+    ctx.fillText(formatAxisValue(maxCount), inset.left - 8, inset.top + 5);
     ctx.fillText("0", inset.left - 8, inset.top + plotHeight + 4);
+  }
+
+  function visibleOutputIndexes() {
+    if (!simulation) return [];
+    return simulation.program.outputNames
+      .map((_, index) => index)
+      .filter((index) => isOutputVisible(index));
+  }
+
+  function isOutputVisible(index) {
+    return !simulation || !simulation.visibleOutputs || simulation.visibleOutputs[index] !== false;
   }
 
   function handleMarginalChartClick(event) {
@@ -666,6 +836,11 @@ run_for 40`,
     }
 
     const selected = simulation.selectedConditional;
+    if (!isOutputVisible(selected.outputIndex)) {
+      simulation.selectedConditional = null;
+      hideConditionalPanel();
+      return;
+    }
     const conditionBucket = conditionalBucket(selected.outputIndex, selected.key);
     if (!conditionBucket) {
       hideConditionalPanel();
@@ -679,11 +854,11 @@ run_for 40`,
 
     const otherIndexes = simulation.program.outputNames
       .map((_, index) => index)
-      .filter((index) => index !== selected.outputIndex);
+      .filter((index) => index !== selected.outputIndex && isOutputVisible(index));
     if (otherIndexes.length === 0) {
       const empty = document.createElement("div");
       empty.className = "conditional-empty";
-      empty.textContent = "No other outputs";
+      empty.textContent = "No other visible outputs";
       nodes.conditionalCharts.appendChild(empty);
       return;
     }
@@ -835,17 +1010,6 @@ run_for 40`,
     return marginalOverflow + simulation.sumDistribution.overflow.count;
   }
 
-  function bucketComposition(compositionTotals) {
-    const weights = compositionTotals.map((value) => Math.abs(Number(value) || 0));
-    const total = weights.reduce((sum, value) => sum + value, 0);
-    if (total <= 0) {
-      return compositionTotals.map((_, index) => ({ index, share: 1 / Math.max(1, compositionTotals.length) }));
-    }
-    return weights
-      .map((weight, index) => ({ index, share: weight / total }))
-      .filter((segment) => segment.share > 0);
-  }
-
   function drawEmptyChart(canvas, text) {
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -885,6 +1049,13 @@ run_for 40`,
     const percent = Number(value) * 100;
     if (percent >= 10 || Number.isInteger(percent)) return `${Math.round(percent)}%`;
     return `${percent.toFixed(1)}%`;
+  }
+
+  function formatAxisValue(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return String(value);
+    if (number >= 1) return formatNumber(Math.ceil(number));
+    return formatNumber(number);
   }
 
   init();

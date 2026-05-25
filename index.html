@@ -70,6 +70,29 @@
                 <span id="output-meta" class="subtle"></span>
               </div>
               <div class="chart-stack">
+                <div class="distribution-controls" aria-label="Distribution chart controls">
+                  <div class="stream-control-group">
+                    <div class="control-title">Streams</div>
+                    <div id="stream-controls" class="stream-controls" aria-label="Output stream visibility"></div>
+                  </div>
+                  <fieldset id="histogram-mode-controls" class="segmented-control">
+                    <legend>Layout</legend>
+                    <div class="segmented-options">
+                      <label>
+                        <input type="radio" name="histogram-mode" value="neighboring" checked>
+                        <span>Neighboring</span>
+                      </label>
+                      <label>
+                        <input type="radio" name="histogram-mode" value="stacked">
+                        <span>Stacked</span>
+                      </label>
+                      <label>
+                        <input type="radio" name="histogram-mode" value="shaded">
+                        <span>Shaded</span>
+                      </label>
+                    </div>
+                  </fieldset>
+                </div>
                 <div class="chart-block">
                   <div class="chart-title">Outputs</div>
                   <canvas id="marginal-chart" width="900" height="310" role="img" aria-label="Marginal histogram for each output variable"></canvas>

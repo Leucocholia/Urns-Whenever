@@ -369,6 +369,115 @@ th {
   padding: 12px 14px 14px;
 }
 
+.distribution-controls {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  align-items: stretch;
+  padding: 10px;
+  border: 1px solid var(--soft-line);
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.control-title,
+.segmented-control legend {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.stream-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.stream-toggle {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  padding: 0 9px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.stream-toggle input {
+  width: 14px;
+  min-height: 14px;
+  margin: 0;
+  accent-color: var(--teal);
+}
+
+.stream-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.12);
+}
+
+.stream-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.segmented-control {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.segmented-options {
+  display: flex;
+  align-items: center;
+}
+
+.segmented-options label {
+  flex: 1;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-right: 0;
+  background: var(--paper);
+  color: var(--muted);
+  padding: 0 8px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.segmented-options label:first-of-type {
+  border-radius: 6px 0 0 6px;
+}
+
+.segmented-options label:last-of-type {
+  border-right: 1px solid var(--line);
+  border-radius: 0 6px 6px 0;
+}
+
+.segmented-control input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.segmented-control label:has(input:checked) {
+  border-color: var(--teal);
+  background: #ecfdf5;
+  color: var(--teal-dark);
+}
+
 .chart-block {
   min-width: 0;
   overflow: hidden;
@@ -699,6 +808,15 @@ th {
 
   .controls-grid {
     display: grid;
+  }
+
+  .distribution-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .segmented-options label {
+    flex: 1;
+    justify-content: center;
   }
 
   .state-tools {
