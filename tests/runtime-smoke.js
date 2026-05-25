@@ -120,4 +120,140 @@ run_for 1`);
   assert.match(python, /heads_out/);
 }
 
+{
+  const program = W.parseProgram(`presets:
+  x: 0
+  y: 0
+  z: 0
+
+outputs:
+  x
+  y
+  z
+
+x:
+  x += flip(0.5)
+  y = binomial(4, 0.25)
+  z = poisson(1.5) + geometric(0.5) + randint(1, 3) + floor(uniform(0, 2))
+
+run_for 2`);
+  assert.equal(program.errors.length, 0);
+  const run = W.runOne(program, { seed: "helpers" });
+  assert.ok(Number.isFinite(run.outputs.x));
+  assert.ok(Number.isFinite(run.outputs.y));
+  assert.ok(Number.isFinite(run.outputs.z));
+}
+
+{
+  const program = W.parseProgram(`presets:
+  trial: 1
+  draw: 0
+  a: 0
+  b: 0
+
+outputs:
+  a
+  b
+
+trial:
+  draw = multinomial(3, 2)
+  a = (draw == 0)
+  b = (draw == 1)
+
+run_for 1`);
+  assert.equal(program.errors.length, 0);
+  const run = W.runOne(program, { seed: "multi" });
+  assert.equal(run.outputs.a + run.outputs.b, 1);
+}
+
+{
+  const short = W.parseProgram(`multinomial(3, 2)
+
+run_for 1`);
+  assert.equal(short.errors.length, 0);
+  assert.deepEqual(short.outputNames, ["a_", "b_"]);
+  assert.equal(short.outputNames.length, 2);
+  const run = W.runOne(short, { seed: "short-multi" });
+  const values = short.outputNames.map((name) => Number(run.outputs[name] || 0));
+  assert.equal(values.reduce((sum, v) => sum + v, 0), 1);
+}
+
+{
+  const shortMany = W.parseProgram(`multinomial(3, 2)
+multinomial(1, 1, 1)
+
+run_for 1`);
+  assert.equal(shortMany.errors.length, 0);
+  assert.equal(shortMany.outputNames.length, 5);
+  const run = W.runOne(shortMany, { seed: "short-multi-many" });
+  const total = shortMany.outputNames.reduce((sum, name) => sum + Number(run.outputs[name] || 0), 0);
+  assert.equal(total, 1);
+}
+
+{
+  const repl = W.parseProgram(`replacement(3, 2)
+
+run_for 10`);
+  assert.equal(repl.errors.length, 0);
+  const run = W.runOne(repl, { seed: "replacement" });
+  const total = repl.outputNames.reduce((sum, name) => sum + Number(run.outputs[name] || 0), 0);
+  assert.equal(total, 10);
+}
+
+{
+  const reinforce0 = W.parseProgram(`reinforcement(0, 3, 2)
+
+run_for 10`);
+  assert.equal(reinforce0.errors.length, 0);
+  const run = W.runOne(reinforce0, { seed: "reinforcement-0" });
+  const total = reinforce0.outputNames.reduce((sum, name) => sum + Number(run.outputs[name] || 0), 0);
+  assert.equal(total, 10);
+}
+
+{
+  const reinforce1 = W.parseProgram(`reinforcement(1, 1, 1)
+
+run_for 30`);
+  assert.equal(reinforce1.errors.length, 0);
+  const run = W.runOne(reinforce1, { seed: "reinforcement-1" });
+  const total = reinforce1.outputNames.reduce((sum, name) => sum + Number(run.outputs[name] || 0), 0);
+  assert.equal(total, 30);
+}
+
+{
+  const hyper = W.parseProgram(`hypergeometric(5, 7)
+
+run_for 8`);
+  assert.equal(hyper.errors.length, 0);
+  const run = W.runOne(hyper, { seed: "hyper" });
+  const total = hyper.outputNames.reduce((sum, name) => sum + Number(run.outputs[name] || 0), 0);
+  assert.equal(total, 8);
+}
+
+{
+  const polya = W.parseProgram(`polya(1, 1)
+
+run_for 30`);
+  assert.equal(polya.errors.length, 0);
+  const run = W.runOne(polya, { seed: "polya" });
+  const total = polya.outputNames.reduce((sum, name) => sum + Number(run.outputs[name] || 0), 0);
+  assert.equal(total, 30);
+}
+
+{
+  const bad = W.parseProgram(`presets:
+  bad_draw: 1
+  x: 0
+
+outputs:
+  x
+
+bad_draw:
+  x = flip(2)
+
+run_for 1`);
+  assert.equal(bad.errors.length, 0);
+  assert.throws(() => W.runOne(bad, { seed: "bad-flip" }), /between 0 and 1/);
+}
+
 console.log("runtime smoke tests passed");

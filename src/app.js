@@ -4,12 +4,17 @@
   const W = window.Whichever;
   const OUTPUT_COLORS = ["#0f766e", "#2563eb", "#b45309", "#be123c", "#64748b", "#7c3aed"];
   const MAX_HISTOGRAM_BUCKETS = 120;
-  const MAX_CONDITIONAL_VALUE_BUCKETS = 80;
+  const MAX_ANALYSIS_RUNS = 10000;
+  const MAX_AUTO_MATRIX_SCATTER_POINTS = 1800;
+  const AUTO_SWEEP_CHART_INTERVAL_MS = 80;
+  const AUTO_SWEEP_MS_PER_UNIT = 500;
+  const AUTO_SWEEP_ENDPOINT_HOLD_MS = 260;
   const HISTOGRAM_MODES = new Set(["neighboring", "stacked", "shaded"]);
+  const DISTRIBUTION_VIEWS = new Set(["outputs", "sum", "joint"]);
 
   const examples = {
     "Coin flips": {
-      fps: 2,
+      delay: 500,
       source: `presets:
   heads: 1
   tails: 1
@@ -29,7 +34,7 @@ tails:
 run_for 10`,
     },
     "Fibonacci 5": {
-      fps: 2,
+      delay: 500,
       source: `presets:
   n_left: 5
   a: 0
@@ -45,46 +50,97 @@ n_left:
 
 run_until (n_left == 0)`,
     },
-    "Biased coin": {
-      fps: 6,
+    "Binomial (n=12, p=0.6)": {
+      delay: 167,
       source: `presets:
-  heads: 3
-  tails: 1
-  heads_out: 0
-  tails_out: 0
+  success: 3
+  failure: 2
+  successes: 0
+  failures: 0
 
 outputs:
-  heads_out
-  tails_out
+  successes
+  failures
 
-heads:
-  heads_out += 1
+success:
+  successes += 1
 
-tails:
-  tails_out += 1
+failure:
+  failures += 1
 
 run_for 12`,
     },
-    "Polya urn": {
-      fps: 8,
-      source: `presets:
-  red: 1
-  blue: 1
+    "Multinomial helper (3:2)": {
+      delay: 300,
+      source: `# Equivalent expansion:
+# presets:
+#   a: 3
+#   b: 2
+#   a_: 0
+#   b_: 0
+# outputs:
+#   a_
+#   b_
+# a:
+#   a_ += 1
+# b:
+#   b_ += 1
+multinomial(3, 2)
 
-outputs:
-  red
-  blue
-
-red:
-  red += 1
-
-blue:
-  blue += 1
+run_for 12`,
+    },
+    "Reinforcement helper (delta=1)": {
+      delay: 220,
+      source: `# reinforcement(delta, w1, w2, ...)
+# Draw from urn weights and apply: drawn_urn += delta, drawn_out += 1
+reinforcement(1, 1, 1)
 
 run_for 30`,
     },
-    "Random walk": {
-      fps: 10,
+    "Hypergeometric (N=12, K=5, n=8)": {
+      delay: 200,
+      source: `# Equivalent expansion:
+# presets:
+#   a: 5
+#   b: 7
+#   a_: 0
+#   b_: 0
+# outputs:
+#   a_
+#   b_
+# a:
+#   a -= 1
+#   a_ += 1
+# b:
+#   b -= 1
+#   b_ += 1
+hypergeometric(5, 7)
+
+run_for 8`,
+    },
+    "Polya Distribution": {
+      delay: 125,
+      source: `# Equivalent expansion:
+# presets:
+#   a: 1
+#   b: 1
+#   a_: 0
+#   b_: 0
+# outputs:
+#   a_
+#   b_
+# a:
+#   a += 1
+#   a_ += 1
+# b:
+#   b += 1
+#   b_ += 1
+polya(1, 1)
+
+run_for 30`,
+    },
+    "1D Random walk": {
+      delay: 100,
       source: `presets:
   left: 1
   right: 1
@@ -101,12 +157,77 @@ right:
 
 run_for 40`,
     },
+    "2D Random walk": {
+      delay: 100,
+      source: `presets:
+  left: 1
+  right: 1
+  up: 1
+  down: 1
+  x: 0
+  y: 0
+
+outputs:
+  x
+  y
+
+left:
+  x -= 1
+
+right:
+  x += 1
+
+up:
+  y += 1
+
+down:
+  y -= 1
+
+run_for 40`,
+    },
+    "3D Random walk": {
+      delay: 100,
+      source: `presets:
+  left: 1
+  right: 1
+  up: 1
+  down: 1
+  back: 1
+  forth: 1
+  x: 0
+  y: 0
+  z: 0
+
+outputs:
+  x
+  y
+  z
+
+left:
+  x -= 1
+
+right:
+  x += 1
+
+up:
+  y += 1
+
+down:
+  y -= 1
+
+back:
+  z -= 1
+
+forth:
+  z += 1
+
+run_for 40`,
+    },
   };
 
   const nodes = {
     exampleSelect: document.getElementById("example-select"),
     playButton: document.getElementById("play-button"),
-    pauseButton: document.getElementById("pause-button"),
     editor: document.getElementById("source-editor"),
     seed: document.getElementById("seed-input"),
     fps: document.getElementById("fps-input"),
@@ -115,21 +236,26 @@ run_for 40`,
     parseStatus: document.getElementById("parse-status"),
     runMeta: document.getElementById("run-meta"),
     outputMeta: document.getElementById("output-meta"),
-    stateCaption: document.getElementById("state-caption"),
     stateSnapshot: document.getElementById("state-snapshot"),
     streamControls: document.getElementById("stream-controls"),
+    distributionViewControls: document.getElementById("distribution-view-controls"),
     histogramModeControls: document.getElementById("histogram-mode-controls"),
+    outputsChartBlock: document.getElementById("outputs-chart-block"),
     marginalChart: document.getElementById("marginal-chart"),
+    sumChartBlock: document.getElementById("sum-chart-block"),
     sumChart: document.getElementById("sum-chart"),
-    conditionalPanel: document.getElementById("conditional-panel"),
-    conditionalTitle: document.getElementById("conditional-title"),
-    conditionalClear: document.getElementById("conditional-clear"),
-    conditionalCharts: document.getElementById("conditional-charts"),
+    fixedConditions: document.getElementById("fixed-conditions"),
+    fixedSliders: document.getElementById("fixed-sliders"),
+    fixedClear: document.getElementById("fixed-clear"),
+    matrixChartBlock: document.getElementById("matrix-chart-block"),
+    matrixChart: document.getElementById("matrix-chart"),
+    matrixChartTitle: document.getElementById("matrix-chart-title"),
   };
 
   let lastProgram = null;
   let simulation = null;
   let playbackTimer = 0;
+  let autoSweepRaf = null;
   let marginalHitAreas = [];
 
   function init() {
@@ -141,25 +267,29 @@ run_for 40`,
     });
 
     nodes.exampleSelect.addEventListener("change", () => loadExample(nodes.exampleSelect.value, true));
-    nodes.playButton.addEventListener("click", play);
-    nodes.pauseButton.addEventListener("click", pause);
+    nodes.playButton.addEventListener("click", togglePlayback);
     nodes.streamControls.addEventListener("change", handleStreamControlsChange);
+    nodes.distributionViewControls.addEventListener("change", handleDistributionViewChange);
     nodes.histogramModeControls.addEventListener("change", handleHistogramModeChange);
     nodes.marginalChart.addEventListener("click", handleMarginalChartClick);
     nodes.marginalChart.addEventListener("mousemove", handleMarginalChartHover);
     nodes.marginalChart.addEventListener("mouseleave", () => {
       nodes.marginalChart.style.cursor = "";
     });
-    nodes.conditionalClear.addEventListener("click", clearConditionalSelection);
+    nodes.fixedClear.addEventListener("click", clearFixedConditions);
     nodes.editor.addEventListener("input", debounce(() => resetSimulation(false), 240));
     nodes.seed.addEventListener("change", () => resetSimulation(false));
     nodes.fps.addEventListener("input", () => {
-      renderFps();
+      renderDelay();
       if (playbackTimer) {
-        pause();
-        play();
+        stopPlayback();
+        startPlayback();
       }
     });
+    window.addEventListener("resize", debounce(() => {
+      renderCurrentFrame();
+      drawDistributionCharts();
+    }, 120));
 
     loadExample("Coin flips", true);
   }
@@ -167,8 +297,8 @@ run_for 40`,
   function loadExample(name, autoplay) {
     const example = examples[name];
     nodes.editor.value = example.source;
-    nodes.fps.value = example.fps;
-    renderFps();
+    nodes.fps.value = example.delay;
+    renderDelay();
     resetSimulation(autoplay);
   }
 
@@ -199,7 +329,8 @@ run_for 40`,
   }
 
   function resetSimulation(autoplay) {
-    pause();
+    stopPlayback();
+    cancelAutoSweep();
     simulation = null;
     const program = parseCurrentProgram();
     clearOutput();
@@ -216,10 +347,6 @@ run_for 40`,
         bins: new Map(),
         overflow: 0,
       })),
-      conditionalDistributions: program.outputNames.map(() => ({
-        bins: new Map(),
-        overflow: 0,
-      })),
       sumDistribution: {
         bins: new Map(),
         overflow: {
@@ -227,17 +354,21 @@ run_for 40`,
           compositionTotals: program.outputNames.map(() => 0),
         },
       },
+      completedRunValues: [],
+      fixedConditions: {},
+      distributionView: currentDistributionView(),
+      _lastAutoSweepDraw: 0,
       currentRunIndex: 0,
       currentRun: null,
       frameIndex: 0,
-      selectedConditional: null,
     };
 
     renderOutputControls();
     loadRun(0);
+    renderFixedConditions();
     renderCurrentFrame();
     drawDistributionCharts();
-    if (autoplay) play();
+    if (autoplay) startPlayback();
   }
 
   function loadRun(index) {
@@ -252,24 +383,36 @@ run_for 40`,
     });
   }
 
-  function play() {
+  function startPlayback() {
     if (!simulation) resetSimulation(false);
     if (!simulation || playbackTimer) return;
-    nodes.playButton.disabled = true;
-    nodes.pauseButton.disabled = false;
+    nodes.playButton.textContent = "Pause";
     playbackTimer = window.setInterval(tick, frameDelay());
   }
 
-  function pause() {
+  function stopPlayback() {
     if (playbackTimer) window.clearInterval(playbackTimer);
     playbackTimer = 0;
-    nodes.playButton.disabled = false;
-    nodes.pauseButton.disabled = true;
+    nodes.playButton.textContent = "Play";
+  }
+
+  function togglePlayback() {
+    if (playbackTimer) {
+      stopPlayback();
+    } else {
+      startPlayback();
+    }
   }
 
   function tick() {
     if (!simulation || !simulation.currentRun) {
-      pause();
+      stopPlayback();
+      return;
+    }
+
+    if (frameDelay() === 0) {
+      simulation.frameIndex = simulation.currentRun.instructionTrace.length - 1;
+      finishCurrentRun(true);
       return;
     }
 
@@ -280,26 +423,30 @@ run_for 40`,
       return;
     }
 
-    finishCurrentRun();
+    finishCurrentRun(false);
   }
 
-  function finishCurrentRun() {
+  function finishCurrentRun(noRender) {
     if (!simulation || !simulation.currentRun) return;
     recordCompletedRun(simulation.currentRun);
     drawDistributionCharts();
 
     const nextRun = simulation.currentRunIndex + 1;
     loadRun(nextRun);
-    renderCurrentFrame();
+    if (noRender) {
+      renderFastRunStatus();
+    } else {
+      renderCurrentFrame();
+    }
   }
 
   function frameDelay() {
-    return 1000 / Math.max(1, Number(nodes.fps.value) || 1);
+    return Math.max(0, Number(nodes.fps.value) || 0);
   }
 
-  function renderFps() {
-    const fps = Math.max(1, Number(nodes.fps.value) || 1);
-    nodes.fpsReadout.textContent = `${fps} FPS`;
+  function renderDelay() {
+    const delay = Math.max(0, Number(nodes.fps.value) || 0);
+    nodes.fpsReadout.textContent = delay === 0 ? "max speed" : `${delay} ms`;
   }
 
   function renderCurrentFrame() {
@@ -308,11 +455,15 @@ run_for 40`,
     const entry = frames[Math.min(simulation.frameIndex, frames.length - 1)];
     if (!entry) return;
 
-    nodes.runMeta.textContent = `Run ${(simulation.currentRunIndex + 1).toLocaleString()}`;
-    nodes.stateCaption.textContent = entry.index === 0
-      ? `Run ${simulation.currentRunIndex + 1}: initial state`
-      : `Run ${simulation.currentRunIndex + 1}, draw ${entry.step}: ${entry.drawn}`;
+    nodes.runMeta.textContent = entry.index === 0
+      ? "initial state"
+      : `draw ${entry.step}: ${entry.drawn}`;
     renderStateUrns(entry.state, simulation.program.outputNames);
+  }
+
+  function renderFastRunStatus() {
+    if (!simulation) return;
+    nodes.runMeta.textContent = "max speed";
   }
 
   function renderMessages(program) {
@@ -337,13 +488,14 @@ run_for 40`,
   function clearOutput() {
     nodes.runMeta.textContent = "";
     nodes.outputMeta.textContent = "";
-    nodes.stateCaption.textContent = "";
     nodes.stateSnapshot.replaceChildren();
     nodes.streamControls.replaceChildren();
-    drawEmptyChart(nodes.marginalChart, "No completed runs");
-    drawEmptyChart(nodes.sumChart, "No completed runs");
+    drawEmptyHistogramAxes(nodes.marginalChart);
+    drawEmptyHistogramAxes(nodes.sumChart);
+    drawEmptyMatrixAxes(nodes.matrixChart);
     marginalHitAreas = [];
-    hideConditionalPanel();
+    nodes.fixedConditions.hidden = true;
+    renderDistributionView();
   }
 
   function renderOutputControls() {
@@ -382,10 +534,11 @@ run_for 40`,
       simulation.visibleOutputs[index] = true;
       event.target.checked = true;
     }
-    if (simulation.selectedConditional && !isOutputVisible(simulation.selectedConditional.outputIndex)) {
-      simulation.selectedConditional = null;
+    if (!isOutputVisible(index) && simulation.fixedConditions[index] !== undefined) {
+      delete simulation.fixedConditions[index];
     }
     renderCurrentFrame();
+    renderFixedConditions();
     drawDistributionCharts();
   }
 
@@ -396,64 +549,115 @@ run_for 40`,
     drawDistributionCharts();
   }
 
+  function handleDistributionViewChange(event) {
+    if (event.target.name !== "distribution-view" || !event.target.checked) return;
+    if (!DISTRIBUTION_VIEWS.has(event.target.value)) return;
+    if (!simulation) {
+      renderDistributionView();
+      return;
+    }
+    simulation.distributionView = event.target.value;
+    drawDistributionCharts();
+  }
+
   function currentHistogramMode() {
     const selected = nodes.histogramModeControls.querySelector("input[name='histogram-mode']:checked");
     return selected && HISTOGRAM_MODES.has(selected.value) ? selected.value : "neighboring";
   }
 
-  function renderStateUrns(state, outputNames) {
-    nodes.stateSnapshot.replaceChildren();
-    outputNames.forEach((name, index) => {
-      if (!isOutputVisible(index)) return;
-      nodes.stateSnapshot.appendChild(createUrnNode(name, Number(state[name] || 0), index));
-    });
+  function currentDistributionView() {
+    const selected = nodes.distributionViewControls.querySelector("input[name='distribution-view']:checked");
+    return selected && DISTRIBUTION_VIEWS.has(selected.value) ? selected.value : "outputs";
   }
 
-  function createUrnNode(name, value, index) {
-    const node = document.createElement("section");
-    node.className = `urn-column unlabeled${value < 0 ? " negative" : ""}`;
-    node.setAttribute("aria-label", `${name} equals ${formatNumber(value)}`);
-    node.title = `${name}: ${formatNumber(value)}`;
+  function renderDistributionView() {
+    const view = simulation ? simulation.distributionView : currentDistributionView();
+    nodes.outputsChartBlock.hidden = view !== "outputs";
+    nodes.sumChartBlock.hidden = view !== "sum";
+    nodes.matrixChartBlock.hidden = view !== "joint";
+    nodes.histogramModeControls.hidden = view === "joint";
+  }
 
-    const stack = document.createElement("div");
-    stack.className = "urn-stack";
+  function renderStateUrns(state, outputNames) {
+    nodes.stateSnapshot.replaceChildren();
+    const field = document.createElement("div");
+    field.className = "urn-field";
+    nodes.stateSnapshot.appendChild(field);
 
-    const magnitude = Number.isInteger(value) ? Math.abs(value) : Math.floor(Math.abs(value));
-    const visibleCount = Math.min(magnitude, 28);
-    const overflow = magnitude - visibleCount;
-    if (overflow > 0) {
-      const overflowNode = document.createElement("span");
-      overflowNode.className = "urn-overflow";
-      overflowNode.textContent = `+${formatNumber(overflow)}`;
-      stack.appendChild(overflowNode);
-    }
-    for (let ball = 0; ball < visibleCount; ball += 1) {
-      const circle = document.createElement("span");
-      circle.className = "urn-ball";
-      circle.style.backgroundColor = outputColor(index);
-      circle.style.borderColor = shadeColor(outputColor(index), -22);
-      stack.appendChild(circle);
-    }
-    if (visibleCount === 0) {
+    const segments = [];
+    let maxStack = 0;
+    outputNames.forEach((name, index) => {
+      if (!isOutputVisible(index)) return;
+      const value = Number(state[name] || 0);
+      const magnitude = Number.isInteger(value) ? Math.abs(value) : Math.floor(Math.abs(value));
+      segments.push({ name, index, value, magnitude });
+      if (magnitude > maxStack) maxStack = magnitude;
+    });
+
+    if (segments.length === 0 || maxStack === 0) {
       const empty = document.createElement("span");
       empty.className = "urn-empty";
-      stack.appendChild(empty);
+      field.appendChild(empty);
+      return;
     }
 
-    node.appendChild(stack);
-    return node;
+    const bounds = nodes.stateSnapshot.getBoundingClientRect();
+    const width = Math.max(160, Math.floor(bounds.width - 24));
+    const height = Math.max(200, Math.floor(bounds.height - 24));
+    const laneCount = segments.length;
+    const laneSpacing = width / (laneCount + 1);
+    const minSize = 6;
+    const maxSize = Math.max(20, Math.floor(width / Math.max(1.5, laneCount + 0.6)));
+    const sizeByWidth = Math.floor(laneSpacing * 0.74);
+    const sizeByHeight = Math.floor((height - 26) / Math.max(1, maxStack));
+    const size = Math.max(minSize, Math.min(maxSize, sizeByWidth, sizeByHeight));
+    const verticalStep = size + 3;
+    const laneCapacity = Math.max(1, Math.floor((height - 26) / verticalStep));
+    field.style.setProperty("--urn-ball-size", `${size}px`);
+    field.style.setProperty("--urn-step-y", `${verticalStep}px`);
+    field.style.setProperty("--urn-lane-gap", `${laneSpacing}px`);
+    field.style.setProperty("--urn-lane-count", String(laneCount));
+    field.style.setProperty("--urn-base-y", `${height - 10}px`);
+
+    segments.forEach((segment, laneIndex) => {
+      const laneX = Math.round(laneSpacing * (laneIndex + 1));
+      const visibleCount = Math.min(segment.magnitude, laneCapacity);
+      for (let stackIndex = 0; stackIndex < visibleCount; stackIndex += 1) {
+        const circle = document.createElement("span");
+        circle.className = `urn-ball${segment.value < 0 ? " negative" : ""}`;
+        circle.style.left = `${laneX}px`;
+        circle.style.bottom = `${8 + stackIndex * verticalStep}px`;
+        circle.style.backgroundColor = outputColor(segment.index);
+        circle.style.borderColor = shadeColor(outputColor(segment.index), -22);
+        circle.title = `${segment.name}: ${formatNumber(segment.value)}`;
+        field.appendChild(circle);
+      }
+      const overflow = segment.magnitude - visibleCount;
+      if (overflow > 0) {
+        const overflowNode = document.createElement("span");
+        overflowNode.className = "urn-overflow";
+        overflowNode.textContent = `+${formatNumber(overflow)}`;
+        overflowNode.style.left = `${laneX}px`;
+        overflowNode.style.bottom = `${8 + visibleCount * verticalStep}px`;
+        overflowNode.title = `${segment.name}: ${formatNumber(segment.value)}`;
+        field.appendChild(overflowNode);
+      }
+    });
   }
 
   function recordCompletedRun(run) {
     if (!simulation) return;
     const values = simulation.program.outputNames.map((name) => Number(run.outputs[name] || 0));
     simulation.completedCount += 1;
+    simulation.completedRunValues.push(values);
+    if (simulation.completedRunValues.length > MAX_ANALYSIS_RUNS) {
+      simulation.completedRunValues.shift();
+    }
 
     values.forEach((value, index) => {
       recordOutputValue(index, value);
     });
     recordOutputSum(values);
-    recordConditionalValues(values);
   }
 
   function recordOutputValue(outputIndex, value) {
@@ -501,88 +705,73 @@ run_for 40`,
     });
   }
 
-  function recordConditionalValues(values) {
-    values.forEach((conditionValue, conditionIndex) => {
-      const distribution = simulation.conditionalDistributions[conditionIndex];
-      const key = bucketKey(conditionValue);
-      let conditionBucket = distribution.bins.get(key);
-      if (!conditionBucket) {
-        if (distribution.bins.size >= MAX_HISTOGRAM_BUCKETS) {
-          distribution.overflow += 1;
-          return;
-        }
-        conditionBucket = {
-          value: conditionValue,
-          label: formatNumber(conditionValue),
-          count: 0,
-          dependentDistributions: simulation.program.outputNames.map(() => ({
-            bins: new Map(),
-            overflow: 0,
-          })),
-        };
-        distribution.bins.set(key, conditionBucket);
-      }
-      conditionBucket.count += 1;
-      values.forEach((value, outputIndex) => {
-        if (outputIndex === conditionIndex) return;
-        recordConditionalDependentValue(conditionBucket.dependentDistributions[outputIndex], value);
-      });
-    });
-  }
-
-  function recordConditionalDependentValue(distribution, value) {
-    const key = bucketKey(value);
-    if (distribution.bins.has(key)) {
-      distribution.bins.get(key).count += 1;
-      return;
-    }
-    if (distribution.bins.size < MAX_CONDITIONAL_VALUE_BUCKETS) {
-      distribution.bins.set(key, {
-        value,
-        label: formatNumber(value),
-        count: 1,
-      });
-      return;
-    }
-    distribution.overflow += 1;
-  }
-
   function drawDistributionCharts() {
+    renderDistributionView();
     if (!simulation || simulation.completedCount === 0) {
-      drawEmptyChart(nodes.marginalChart, "No completed runs");
-      drawEmptyChart(nodes.sumChart, "No completed runs");
-      renderConditionalPanel();
+      if (currentDistributionView() === "outputs") drawEmptyHistogramAxes(nodes.marginalChart);
+      if (currentDistributionView() === "sum") drawEmptyHistogramAxes(nodes.sumChart);
+      if (currentDistributionView() === "joint") drawEmptyMatrixAxes(nodes.matrixChart);
+      if (simulation) renderFixedConditions();
+      else nodes.fixedConditions.hidden = true;
       return;
     }
-    drawMarginalChart();
-    drawSumChart();
-    renderConditionalPanel();
+    if (simulation.distributionView === "outputs") {
+      drawMarginalChart();
+    } else {
+      marginalHitAreas = [];
+    }
+    if (simulation.distributionView === "sum") drawSumChart();
+    if (simulation.distributionView === "joint") drawMatrixChart();
+    const fixedCount = Object.keys(simulation.fixedConditions).length;
+    if (fixedCount > 0) {
+      const match = getFilteredRunMatchCount();
+      const sampleCount = simulation.completedRunValues.length;
+      const sampleNote = sampleCount < simulation.completedCount
+        ? `last ${sampleCount.toLocaleString()} sampled runs`
+        : `${sampleCount.toLocaleString()} runs`;
+      nodes.outputMeta.textContent = `${match.label} of ${sampleNote} match`;
+      return;
+    }
     const overflow = totalOverflowCount();
     nodes.outputMeta.textContent = `${simulation.completedCount.toLocaleString()} completed run${simulation.completedCount === 1 ? "" : "s"}${overflow > 0 ? `, ${overflow.toLocaleString()} overflowed observation${overflow === 1 ? "" : "s"}` : ""}`;
   }
 
   function drawMarginalChart() {
     const canvas = nodes.marginalChart;
-    const ctx = canvas.getContext("2d");
-    const width = canvas.width;
-    const height = canvas.height;
+    const { ctx, width, height } = prepareCanvas(canvas);
     const inset = { left: 42, right: 18, top: 18, bottom: 36 };
     const plotWidth = width - inset.left - inset.right;
     const plotHeight = height - inset.top - inset.bottom;
-    const buckets = marginalBuckets();
-    const visibleIndexes = visibleOutputIndexes();
-    if (visibleIndexes.length === 0 || buckets.length === 0) {
+
+    const visibleIndexes = visibleOutputIndexes().filter(
+      (index) => !(index in simulation.fixedConditions)
+    );
+    const globalBuckets = marginalBuckets(simulation.outputDistributions);
+    if (visibleIndexes.length === 0 || globalBuckets.length === 0) {
       marginalHitAreas = [];
-      drawEmptyChart(canvas, "No visible outputs");
+      drawEmptyHistogramAxes(canvas);
       return;
     }
+    const conditionalDistributions = getChartDistributions();
     const mode = simulation.histogramMode;
-    const maxCount = maxSeriesBucketValue(buckets, (bucket) => {
+    const maxCount = maxSeriesBucketValue(globalBuckets, (bucket) => {
       return visibleIndexes.map((index) => ({ index, value: bucket.counts[index] || 0 }));
     }, mode);
+
+    // Use global X-axis positions with conditional bar heights
+    const buckets = globalBuckets.map((b) => {
+      const counts = simulation.program.outputNames.map((_, index) => {
+        if (!conditionalDistributions) return 0;
+        const dist = conditionalDistributions[index];
+        if (!dist) return 0;
+        if (b.key === "other") return dist.overflow;
+        const bin = dist.bins.get(b.key);
+        return bin ? bin.count : 0;
+      });
+      return { ...b, counts };
+    });
     const slotWidth = plotWidth / Math.max(1, buckets.length);
     const labelEvery = Math.max(1, Math.ceil(buckets.length / 10));
-    const selected = simulation.selectedConditional;
 
     marginalHitAreas = [];
     drawChartFrame(ctx, width, height, inset);
@@ -614,9 +803,6 @@ run_for 40`,
             label: bucket.label,
           });
         }
-        if (selected && selected.outputIndex === rect.index && selected.key === bucket.key) {
-          drawSelectedRect(ctx, rect);
-        }
       });
       if (bucketIndex % labelEvery === 0 || bucketIndex === buckets.length - 1) {
         ctx.fillStyle = "#687386";
@@ -630,22 +816,24 @@ run_for 40`,
 
   function drawSumChart() {
     const canvas = nodes.sumChart;
-    const ctx = canvas.getContext("2d");
-    const width = canvas.width;
-    const height = canvas.height;
+    const { ctx, width, height } = prepareCanvas(canvas);
     const inset = { left: 42, right: 18, top: 18, bottom: 36 };
     const plotWidth = width - inset.left - inset.right;
     const plotHeight = height - inset.top - inset.bottom;
-    const buckets = sumBuckets();
+    const globalBuckets = sumBuckets(simulation.sumDistribution);
     const visibleIndexes = visibleOutputIndexes();
-    if (visibleIndexes.length === 0 || buckets.length === 0) {
-      drawEmptyChart(canvas, "No visible outputs");
+    if (visibleIndexes.length === 0 || globalBuckets.length === 0) {
+      drawEmptyHistogramAxes(canvas);
       return;
     }
+    const conditionalDistribution = getSumDistribution();
     const mode = simulation.histogramMode;
-    const maxCount = maxSeriesBucketValue(buckets, (bucket) => {
+    const maxCount = maxSeriesBucketValue(globalBuckets, (bucket) => {
       return compositionCountSeries(bucket).filter((item) => visibleIndexes.includes(item.index));
     }, mode);
+    const buckets = globalBuckets.map((bucket) => conditionalDistribution
+      ? conditionalSumBucket(bucket, conditionalDistribution)
+      : emptySumBucketLike(bucket));
     const slotWidth = plotWidth / Math.max(1, buckets.length);
     const labelEvery = Math.max(1, Math.ceil(buckets.length / 10));
 
@@ -671,6 +859,218 @@ run_for 40`,
       }
     });
     drawYAxisLabels(ctx, inset, plotHeight, maxCount);
+  }
+
+  function drawMatrixChart() {
+    const visible = visibleOutputIndexes().filter(
+      (index) => !(index in simulation.fixedConditions)
+    );
+    if (visible.length !== 2 && visible.length !== 3) {
+      nodes.matrixChartTitle.textContent = "Joint Distribution";
+      drawEmptyChart(nodes.matrixChart, "Joint needs 2 or 3 variables");
+      return;
+    }
+    const source = getMatrixSource(visible);
+
+    if (visible.length === 2) {
+      nodes.matrixChartTitle.textContent = "Joint Distribution";
+      drawMatrixHeatmap(visible, source || { runs: [], jointMap: new Map() });
+    } else {
+      nodes.matrixChartTitle.textContent = "3D Scatter";
+      draw3DScatter(visible, source && source.runs ? source.runs : []);
+    }
+  }
+
+  function drawMatrixHeatmap(visible, source) {
+    const [idxA, idxB] = visible;
+    const nameA = simulation.program.outputNames[idxA];
+    const nameB = simulation.program.outputNames[idxB];
+
+    const canvas = nodes.matrixChart;
+    const { ctx, width, height } = prepareCanvas(canvas);
+    const inset = { left: 52, right: 18, top: 18, bottom: 48 };
+    const plotWidth = width - inset.left - inset.right;
+    const plotHeight = height - inset.top - inset.bottom;
+
+    // Global keys and max from all completed runs for stable axes and color
+    const globalKeysA = new Set();
+    const globalKeysB = new Set();
+    const globalJointMap = new Map();
+    simulation.completedRunValues.forEach((values) => {
+      const ka = bucketKey(values[idxA]);
+      const kb = bucketKey(values[idxB]);
+      globalKeysA.add(ka);
+      globalKeysB.add(kb);
+      if (!globalJointMap.has(ka)) globalJointMap.set(ka, new Map());
+      const row = globalJointMap.get(ka);
+      row.set(kb, (row.get(kb) || 0) + 1);
+    });
+
+    const sortedA = Array.from(globalKeysA).sort(compareBucketValuesByKey);
+    const sortedB = Array.from(globalKeysB).sort(compareBucketValuesByKey);
+    const numRows = sortedA.length;
+    const numCols = sortedB.length;
+
+    if (numRows === 0 || numCols === 0) {
+      drawEmptyMatrixAxes(canvas);
+      return;
+    }
+
+    let maxCount = 0;
+    globalJointMap.forEach((row) => {
+      row.forEach((count) => {
+        if (count > maxCount) maxCount = count;
+      });
+    });
+    if (maxCount === 0) maxCount = 1;
+
+    const jointMap = source.jointMap || buildJointMapFromRuns(source.runs, idxA, idxB, 1);
+
+    const cellW = Math.max(4, plotWidth / numCols);
+    const cellH = Math.max(4, plotHeight / numRows);
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.strokeStyle = "#e9edf3";
+    ctx.lineWidth = 1;
+
+    sortedA.forEach((ka, row) => {
+      sortedB.forEach((kb, col) => {
+        const count = (jointMap.get(ka) && jointMap.get(ka).get(kb)) || 0;
+        const intensity = count / maxCount;
+        const x = inset.left + col * cellW;
+        const y = inset.top + row * cellH;
+
+        ctx.fillStyle = `rgba(15, 118, 110, ${intensity})`;
+        ctx.fillRect(x, y, cellW, cellH);
+        ctx.strokeRect(x, y, cellW, cellH);
+      });
+    });
+
+    ctx.fillStyle = "#687386";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    const labelEveryX = Math.max(1, Math.ceil(numCols / 8));
+    sortedB.forEach((kb, col) => {
+      if (col % labelEveryX === 0 || col === numCols - 1) {
+        ctx.fillText(kb, inset.left + col * cellW + cellW / 2, inset.top + plotHeight + 22);
+      }
+    });
+
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    const labelEveryY = Math.max(1, Math.ceil(numRows / 8));
+    sortedA.forEach((ka, row) => {
+      if (row % labelEveryY === 0 || row === numRows - 1) {
+        ctx.fillText(ka, inset.left - 8, inset.top + row * cellH + cellH / 2);
+      }
+    });
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.fillText(nameB, inset.left + plotWidth / 2, height - 4);
+
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.save();
+    ctx.translate(8, inset.top + plotHeight / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.fillText(nameA, 0, 0);
+    ctx.restore();
+  }
+
+  function draw3DScatter(visible, runs) {
+    const [idxA, idxB, idxC] = visible;
+    const nameA = simulation.program.outputNames[idxA];
+    const nameB = simulation.program.outputNames[idxB];
+    const nameC = simulation.program.outputNames[idxC];
+    nodes.matrixChartTitle.textContent = "3D Scatter";
+
+    const canvas = nodes.matrixChart;
+    const { ctx, width, height } = prepareCanvas(canvas);
+    const inset = { left: 50, right: 30, top: 20, bottom: 30 };
+    const plotWidth = width - inset.left - inset.right;
+    const plotHeight = height - inset.top - inset.bottom;
+
+    let minA = Infinity, maxA = -Infinity;
+    let minB = Infinity, maxB = -Infinity;
+    let minC = Infinity, maxC = -Infinity;
+    simulation.completedRunValues.forEach((r) => {
+      const a = r[idxA], b = r[idxB], c = r[idxC];
+      if (a < minA) minA = a; if (a > maxA) maxA = a;
+      if (b < minB) minB = b; if (b > maxB) maxB = b;
+      if (c < minC) minC = c; if (c > maxC) maxC = c;
+    });
+    const rangeA = Math.max(maxA - minA, 1);
+    const rangeB = Math.max(maxB - minB, 1);
+    const rangeC = Math.max(maxC - minC, 1);
+
+    const angle = Date.now() / 5000;
+    const cosY = Math.cos(angle), sinY = Math.sin(angle);
+    const tilt = 0.55;
+    const cosX = Math.cos(tilt), sinX = Math.sin(tilt);
+    const scale = Math.min(plotWidth, plotHeight) * 0.57;
+
+    const centerX = inset.left + plotWidth / 2;
+    const centerY = inset.top + plotHeight / 2;
+
+    function project(a, b, c) {
+      const nx = (a - minA) / rangeA - 0.5;
+      const ny = (b - minB) / rangeB - 0.5;
+      const nz = (c - minC) / rangeC - 0.5;
+      let x = nx * cosY + nz * sinY;
+      let z = -nx * sinY + nz * cosY;
+      let y = ny * cosX - z * sinX;
+      z = ny * sinX + z * cosX;
+      return { x: centerX + x * scale, y: centerY - y * scale, depth: z };
+    }
+
+    const offset = 0.55;
+    const o = project(
+      minA + rangeA * offset,
+      minB + rangeB * offset,
+      minC + rangeC * offset
+    );
+    const endA = project(maxA, minB + rangeB * offset, minC + rangeC * offset);
+    const endB = project(minA + rangeA * offset, maxB, minC + rangeC * offset);
+    const endC = project(minA + rangeA * offset, minB + rangeB * offset, maxC);
+
+    const projected = runs.map((r) => ({
+      ...project(r[idxA], r[idxB], r[idxC]),
+    }));
+    projected.sort((p1, p2) => p1.depth - p2.depth);
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.strokeStyle = "#687386";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(o.x, o.y); ctx.lineTo(endA.x, endA.y);
+    ctx.moveTo(o.x, o.y); ctx.lineTo(endB.x, endB.y);
+    ctx.moveTo(o.x, o.y); ctx.lineTo(endC.x, endC.y);
+    ctx.stroke();
+
+    projected.forEach((p) => {
+      const r = Math.max(1.5, 3 - p.depth);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(15, 118, 110, 0.25)`;
+      ctx.fill();
+    });
+
+    ctx.fillStyle = "#18212f";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(nameA, endA.x, endA.y - 4);
+    ctx.fillText(nameB, endB.x, endB.y - 4);
+    ctx.fillText(nameC, endC.x, endC.y - 4);
   }
 
   function drawHistogramSeries(ctx, options) {
@@ -720,12 +1120,6 @@ run_for 40`,
     ctx.globalAlpha = 1;
   }
 
-  function drawSelectedRect(ctx, rect) {
-    ctx.strokeStyle = "#111827";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(rect.x - 2, rect.y - 2, rect.width + 4, rect.height + 4);
-  }
-
   function maxSeriesBucketValue(buckets, seriesForBucket, mode) {
     return Math.max(1, ...buckets.map((bucket) => {
       const series = seriesForBucket(bucket).filter((item) => item.value > 0);
@@ -770,6 +1164,22 @@ run_for 40`,
     ctx.fillText("0", inset.left - 8, inset.top + plotHeight + 4);
   }
 
+  function prepareCanvas(canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = Math.max(1, Math.floor(rect.width || canvas.clientWidth || canvas.width));
+    const cssHeight = Math.max(1, Math.floor(rect.height || canvas.clientHeight || canvas.height));
+    const targetWidth = Math.round(cssWidth * dpr);
+    const targetHeight = Math.round(cssHeight * dpr);
+    if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx, width: cssWidth, height: cssHeight };
+  }
+
   function visibleOutputIndexes() {
     if (!simulation) return [];
     return simulation.program.outputNames
@@ -785,15 +1195,16 @@ run_for 40`,
     if (!simulation) return;
     const hit = marginalHitAt(event);
     if (!hit) {
-      clearConditionalSelection();
       return;
     }
-    simulation.selectedConditional = {
-      outputIndex: hit.outputIndex,
-      key: hit.key,
-      value: hit.value,
-      label: hit.label,
-    };
+    const { outputIndex, key, value, label } = hit;
+    const existing = simulation.fixedConditions[outputIndex];
+    if (existing && existing.key === key) {
+      delete simulation.fixedConditions[outputIndex];
+    } else {
+      simulation.fixedConditions[outputIndex] = { key, value, label, auto: false };
+    }
+    renderFixedConditions();
     drawDistributionCharts();
   }
 
@@ -815,136 +1226,634 @@ run_for 40`,
   function canvasPoint(canvas, event) {
     const rect = canvas.getBoundingClientRect();
     return {
-      x: (event.clientX - rect.left) * (canvas.width / rect.width),
-      y: (event.clientY - rect.top) * (canvas.height / rect.height),
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
     };
   }
 
-  function clearConditionalSelection() {
-    if (!simulation || !simulation.selectedConditional) {
-      hideConditionalPanel();
-      return;
-    }
-    simulation.selectedConditional = null;
+  function clearFixedConditions() {
+    if (!simulation) return;
+    simulation.fixedConditions = {};
+    cancelAutoSweep();
+    renderFixedConditions();
     drawDistributionCharts();
   }
 
-  function renderConditionalPanel() {
-    if (!simulation || !simulation.selectedConditional) {
-      hideConditionalPanel();
-      return;
+  function getFilteredRunMatchCount() {
+    const fixedEntries = Object.entries(simulation.fixedConditions);
+    const fracEntry = fixedEntries.find(([_, condition]) => {
+      return condition.auto && !Number.isInteger(Number(condition.value));
+    });
+    if (!fracEntry) {
+      return { value: getFilteredRuns().length, label: getFilteredRuns().length.toLocaleString() };
     }
 
-    const selected = simulation.selectedConditional;
-    if (!isOutputVisible(selected.outputIndex)) {
-      simulation.selectedConditional = null;
-      hideConditionalPanel();
-      return;
-    }
-    const conditionBucket = conditionalBucket(selected.outputIndex, selected.key);
-    if (!conditionBucket) {
-      hideConditionalPanel();
-      return;
-    }
+    const [fracIndexStr, fracCondition] = fracEntry;
+    const value = Number(fracCondition.value);
+    const floorVal = Math.floor(value);
+    const ceilVal = Math.ceil(value);
+    const t = value - floorVal;
+    const floorCondition = { ...fracCondition, value: floorVal, key: bucketKey(floorVal), label: formatNumber(floorVal) };
+    const ceilCondition = { ...fracCondition, value: ceilVal, key: bucketKey(ceilVal), label: formatNumber(ceilVal) };
+    const floorEntries = fixedEntries.map(([index, condition]) => {
+      return index === fracIndexStr ? [index, floorCondition] : [index, condition];
+    });
+    const ceilEntries = fixedEntries.map(([index, condition]) => {
+      return index === fracIndexStr ? [index, ceilCondition] : [index, condition];
+    });
+    const count = getFilteredRunsFor(floorEntries).length * (1 - t) + getFilteredRunsFor(ceilEntries).length * t;
+    return { value: count, label: `~${formatNumber(count)}` };
+  }
 
-    const conditionName = simulation.program.outputNames[selected.outputIndex];
-    nodes.conditionalPanel.hidden = false;
-    nodes.conditionalTitle.textContent = `Given ${conditionName} = ${conditionBucket.label} (${conditionBucket.count.toLocaleString()} run${conditionBucket.count === 1 ? "" : "s"})`;
-    nodes.conditionalCharts.replaceChildren();
-
-    const otherIndexes = simulation.program.outputNames
-      .map((_, index) => index)
-      .filter((index) => index !== selected.outputIndex && isOutputVisible(index));
-    if (otherIndexes.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "conditional-empty";
-      empty.textContent = "No other visible outputs";
-      nodes.conditionalCharts.appendChild(empty);
-      return;
-    }
-
-    otherIndexes.forEach((outputIndex) => {
-      const block = document.createElement("section");
-      block.className = "conditional-chart-block";
-
-      const title = document.createElement("div");
-      title.className = "conditional-chart-title";
-      title.textContent = simulation.program.outputNames[outputIndex];
-
-      const canvas = document.createElement("canvas");
-      canvas.className = "conditional-chart";
-      canvas.width = 420;
-      canvas.height = 180;
-      canvas.setAttribute("role", "img");
-      canvas.setAttribute("aria-label", `Conditional histogram for ${simulation.program.outputNames[outputIndex]}`);
-
-      block.appendChild(title);
-      block.appendChild(canvas);
-      nodes.conditionalCharts.appendChild(block);
-      drawConditionalChart(canvas, conditionBucket.dependentDistributions[outputIndex], outputIndex, conditionBucket.count);
+  function getFilteredRuns() {
+    const fixedEntries = Object.entries(simulation.fixedConditions);
+    if (fixedEntries.length === 0) return simulation.completedRunValues;
+    return simulation.completedRunValues.filter((values) => {
+      return fixedEntries.every(([indexStr, condition]) => {
+        return bucketKey(values[Number(indexStr)]) === condition.key;
+      });
     });
   }
 
-  function hideConditionalPanel() {
-    nodes.conditionalPanel.hidden = true;
-    nodes.conditionalTitle.textContent = "";
-    nodes.conditionalCharts.replaceChildren();
+  function buildDistributions(runs, fixedIndexes) {
+    const distributions = simulation.program.outputNames.map(() => ({
+      bins: new Map(),
+      overflow: 0,
+    }));
+    runs.forEach((values) => {
+      values.forEach((value, index) => {
+        if (fixedIndexes.includes(index)) return;
+        const key = bucketKey(value);
+        const dist = distributions[index];
+        if (dist.bins.has(key)) {
+          dist.bins.get(key).count += 1;
+        } else if (dist.bins.size < MAX_HISTOGRAM_BUCKETS) {
+          dist.bins.set(key, { value, label: formatNumber(value), count: 1 });
+        } else {
+          dist.overflow += 1;
+        }
+      });
+    });
+    return distributions;
   }
 
-  function conditionalBucket(outputIndex, key) {
-    const distribution = simulation.conditionalDistributions[outputIndex];
-    return distribution ? distribution.bins.get(key) : null;
-  }
-
-  function drawConditionalChart(canvas, distribution, outputIndex, sampleCount) {
-    const ctx = canvas.getContext("2d");
-    const width = canvas.width;
-    const height = canvas.height;
-    const inset = { left: 42, right: 14, top: 16, bottom: 34 };
-    const plotWidth = width - inset.left - inset.right;
-    const plotHeight = height - inset.top - inset.bottom;
-    const buckets = conditionalBuckets(distribution);
-    if (buckets.length === 0) {
-      drawEmptyChart(canvas, "No observations");
-      return;
-    }
-
-    const maxProbability = Math.max(0.01, ...buckets.map((bucket) => bucket.count / Math.max(1, sampleCount)));
-    const barGap = buckets.length > 28 ? 2 : 4;
-    const barWidth = Math.max(3, (plotWidth - barGap * Math.max(0, buckets.length - 1)) / Math.max(1, buckets.length));
-    const labelEvery = Math.max(1, Math.ceil(buckets.length / 7));
-
-    drawChartFrame(ctx, width, height, inset);
-    buckets.forEach((bucket, bucketIndex) => {
-      const probability = bucket.count / Math.max(1, sampleCount);
-      const barHeight = probability / maxProbability * plotHeight;
-      const x = inset.left + bucketIndex * (barWidth + barGap);
-      const y = inset.top + plotHeight - barHeight;
-      ctx.fillStyle = outputColor(outputIndex);
-      ctx.globalAlpha = bucket.label === "other" ? 0.58 : 0.88;
-      ctx.fillRect(x, y, barWidth, barHeight);
-      ctx.globalAlpha = 1;
-      if (bucketIndex % labelEvery === 0 || bucketIndex === buckets.length - 1) {
-        ctx.fillStyle = "#687386";
-        ctx.font = "11px system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(bucket.label, x + barWidth / 2, inset.top + plotHeight + 21);
+  function buildSumDistribution(runs, weight) {
+    const distribution = emptySumDistribution();
+    const unit = Number.isFinite(weight) ? weight : 1;
+    if (!runs || runs.length === 0 || unit <= 0) return distribution;
+    runs.forEach((values) => {
+      const sum = values.reduce((total, value) => total + value, 0);
+      const key = bucketKey(sum);
+      if (!distribution.bins.has(key)) {
+        if (distribution.bins.size < MAX_HISTOGRAM_BUCKETS) {
+          distribution.bins.set(key, {
+            value: sum,
+            label: formatNumber(sum),
+            count: 0,
+            compositionTotals: simulation.program.outputNames.map(() => 0),
+          });
+        } else {
+          distribution.overflow.count += unit;
+          values.forEach((value, index) => {
+            distribution.overflow.compositionTotals[index] += Math.abs(value) * unit;
+          });
+          return;
+        }
       }
+      const bucket = distribution.bins.get(key);
+      bucket.count += unit;
+      values.forEach((value, index) => {
+        bucket.compositionTotals[index] += Math.abs(value) * unit;
+      });
     });
-    drawProbabilityYAxisLabels(ctx, inset, plotHeight, maxProbability);
+    return distribution;
   }
 
-  function drawProbabilityYAxisLabels(ctx, inset, plotHeight, maxProbability) {
-    ctx.fillStyle = "#687386";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.textAlign = "right";
-    ctx.fillText(formatPercent(maxProbability), inset.left - 8, inset.top + 5);
-    ctx.fillText("0", inset.left - 8, inset.top + plotHeight + 4);
+  function emptySumDistribution() {
+    return {
+      bins: new Map(),
+      overflow: {
+        count: 0,
+        compositionTotals: simulation.program.outputNames.map(() => 0),
+      },
+    };
   }
 
-  function marginalBuckets() {
+  function getChartDistributions() {
+    const fixedEntries = Object.entries(simulation.fixedConditions);
+    if (fixedEntries.length === 0) {
+      return simulation.outputDistributions;
+    }
+    const fixedIndexes = fixedEntries.map(([index]) => Number(index));
+
+    // Check for fractional auto condition that needs interpolation
+    const fracEntry = fixedEntries.find(([_, c]) => c.auto && !Number.isInteger(Number(c.value)));
+    if (fracEntry) {
+      return getInterpolatedDistributions(fixedEntries, fixedIndexes, fracEntry);
+    }
+
+    const filteredRuns = getFilteredRuns();
+    if (filteredRuns.length === 0) return null;
+    return buildDistributions(filteredRuns, fixedIndexes);
+  }
+
+  function getSumDistribution() {
+    const fixedEntries = Object.entries(simulation.fixedConditions);
+    if (fixedEntries.length === 0) {
+      return simulation.sumDistribution;
+    }
+
+    const fracEntry = fixedEntries.find(([_, c]) => c.auto && !Number.isInteger(Number(c.value)));
+    if (fracEntry) {
+      return getInterpolatedSumDistribution(fixedEntries, fracEntry);
+    }
+
+    const filteredRuns = getFilteredRuns();
+    if (filteredRuns.length === 0) return null;
+    return buildSumDistribution(filteredRuns, 1);
+  }
+
+  function getMatrixSource(visible) {
+    const fixedEntries = Object.entries(simulation.fixedConditions);
+    if (fixedEntries.length === 0) {
+      return { runs: simulation.completedRunValues };
+    }
+    const fracEntry = fixedEntries.find(([_, c]) => c.auto && !Number.isInteger(Number(c.value)));
+    if (!fracEntry) {
+      const runs = getFilteredRuns();
+      return runs.length === 0 ? null : { runs };
+    }
+    return getInterpolatedMatrixSource(visible, fixedEntries, fracEntry);
+  }
+
+  function getInterpolatedDistributions(fixedEntries, fixedIndexes, fracEntry) {
+    const [fracIndexStr, fracCondition] = fracEntry;
+    const value = Number(fracCondition.value);
+    const floorVal = Math.floor(value);
+    const ceilVal = Math.ceil(value);
+    const t = value - floorVal;
+    if (t === 0 || floorVal === ceilVal) {
+      const filteredRuns = getFilteredRuns();
+      return filteredRuns.length === 0 ? null : buildDistributions(filteredRuns, fixedIndexes);
+    }
+
+    const floorCondition = { ...fracCondition, value: floorVal, key: bucketKey(floorVal), label: formatNumber(floorVal) };
+    const ceilCondition = { ...fracCondition, value: ceilVal, key: bucketKey(ceilVal), label: formatNumber(ceilVal) };
+
+    const floorEntries = fixedEntries.map(([idx, c]) => idx === fracIndexStr ? [idx, floorCondition] : [idx, c]);
+    const ceilEntries = fixedEntries.map(([idx, c]) => idx === fracIndexStr ? [idx, ceilCondition] : [idx, c]);
+
+    const floorRuns = getFilteredRunsFor(floorEntries);
+    const ceilRuns = getFilteredRunsFor(ceilEntries);
+    if (floorRuns.length === 0 && ceilRuns.length === 0) return null;
+
+    const floorDists = buildDistributions(floorRuns, fixedIndexes);
+    const ceilDists = buildDistributions(ceilRuns, fixedIndexes);
+
+    const result = simulation.program.outputNames.map(() => ({
+      bins: new Map(), overflow: 0,
+    }));
+    const allKeys = new Set();
+    floorDists.forEach((d, i) => {
+      if (fixedIndexes.includes(i)) return;
+      d.bins.forEach((_, key) => allKeys.add(key));
+    });
+    ceilDists.forEach((d, i) => {
+      if (fixedIndexes.includes(i)) return;
+      d.bins.forEach((_, key) => allKeys.add(key));
+    });
+    result.forEach((dist, index) => {
+      if (fixedIndexes.includes(index)) return;
+      allKeys.forEach((key) => {
+        const floorBin = floorDists[index].bins.get(key);
+        const ceilBin = ceilDists[index].bins.get(key);
+        const count = (floorBin ? floorBin.count : 0) * (1 - t) + (ceilBin ? ceilBin.count : 0) * t;
+        if (count > 0) {
+          const sampleValue = floorBin ? floorBin.value : (ceilBin ? ceilBin.value : 0);
+          dist.bins.set(key, { value: sampleValue, label: formatNumber(sampleValue), count });
+        }
+      });
+      dist.overflow = Math.round(floorDists[index].overflow * (1 - t) + ceilDists[index].overflow * t);
+    });
+    return result;
+  }
+
+  function getInterpolatedSumDistribution(fixedEntries, fracEntry) {
+    const [fracIndexStr, fracCondition] = fracEntry;
+    const value = Number(fracCondition.value);
+    const floorVal = Math.floor(value);
+    const ceilVal = Math.ceil(value);
+    const t = value - floorVal;
+    if (t === 0 || floorVal === ceilVal) {
+      const filteredRuns = getFilteredRuns();
+      return filteredRuns.length === 0 ? null : buildSumDistribution(filteredRuns, 1);
+    }
+
+    const floorCondition = { ...fracCondition, value: floorVal, key: bucketKey(floorVal), label: formatNumber(floorVal) };
+    const ceilCondition = { ...fracCondition, value: ceilVal, key: bucketKey(ceilVal), label: formatNumber(ceilVal) };
+    const floorEntries = fixedEntries.map(([idx, c]) => idx === fracIndexStr ? [idx, floorCondition] : [idx, c]);
+    const ceilEntries = fixedEntries.map(([idx, c]) => idx === fracIndexStr ? [idx, ceilCondition] : [idx, c]);
+
+    const floorRuns = getFilteredRunsFor(floorEntries);
+    const ceilRuns = getFilteredRunsFor(ceilEntries);
+    if (floorRuns.length === 0 && ceilRuns.length === 0) return null;
+
+    return mergeSumDistributions(
+      buildSumDistribution(floorRuns, 1 - t),
+      buildSumDistribution(ceilRuns, t)
+    );
+  }
+
+  function getInterpolatedMatrixSource(visible, fixedEntries, fracEntry) {
+    const [fracIndexStr, fracCondition] = fracEntry;
+    const value = Number(fracCondition.value);
+    const floorVal = Math.floor(value);
+    const ceilVal = Math.ceil(value);
+    const t = value - floorVal;
+    if (t === 0 || floorVal === ceilVal) {
+      const runs = getFilteredRuns();
+      return runs.length === 0 ? null : { runs };
+    }
+
+    const floorCondition = { ...fracCondition, value: floorVal, key: bucketKey(floorVal), label: formatNumber(floorVal) };
+    const ceilCondition = { ...fracCondition, value: ceilVal, key: bucketKey(ceilVal), label: formatNumber(ceilVal) };
+    const floorEntries = fixedEntries.map(([idx, c]) => idx === fracIndexStr ? [idx, floorCondition] : [idx, c]);
+    const ceilEntries = fixedEntries.map(([idx, c]) => idx === fracIndexStr ? [idx, ceilCondition] : [idx, c]);
+
+    const floorRuns = getFilteredRunsFor(floorEntries);
+    const ceilRuns = getFilteredRunsFor(ceilEntries);
+    if (floorRuns.length === 0 && ceilRuns.length === 0) return null;
+
+    if (visible.length === 2) {
+      const floorMap = buildJointMapFromRuns(floorRuns, visible[0], visible[1], 1 - t);
+      const ceilMap = buildJointMapFromRuns(ceilRuns, visible[0], visible[1], t);
+      return {
+        runs: [],
+        jointMap: mergeJointMaps(floorMap, ceilMap),
+      };
+    }
+
+    return {
+      runs: blendRunSamples(floorRuns, ceilRuns, t),
+    };
+  }
+
+  function getFilteredRunsFor(entries) {
+    if (entries.length === 0) return simulation.completedRunValues;
+    return simulation.completedRunValues.filter((values) => {
+      return entries.every(([indexStr, condition]) => {
+        return bucketKey(values[Number(indexStr)]) === condition.key;
+      });
+    });
+  }
+
+  function buildJointMapFromRuns(runs, idxA, idxB, weight) {
+    const map = new Map();
+    if (!runs || runs.length === 0) return map;
+    const unit = Number.isFinite(weight) ? weight : 1;
+    if (unit <= 0) return map;
+    runs.forEach((values) => {
+      const keyA = bucketKey(values[idxA]);
+      const keyB = bucketKey(values[idxB]);
+      if (!map.has(keyA)) map.set(keyA, new Map());
+      const row = map.get(keyA);
+      row.set(keyB, (row.get(keyB) || 0) + unit);
+    });
+    return map;
+  }
+
+  function mergeJointMaps(left, right) {
+    const merged = new Map();
+    const mergeIn = (source) => {
+      source.forEach((row, keyA) => {
+        if (!merged.has(keyA)) merged.set(keyA, new Map());
+        const targetRow = merged.get(keyA);
+        row.forEach((count, keyB) => {
+          targetRow.set(keyB, (targetRow.get(keyB) || 0) + count);
+        });
+      });
+    };
+    mergeIn(left || new Map());
+    mergeIn(right || new Map());
+    return merged;
+  }
+
+  function mergeSumDistributions(left, right) {
+    const merged = emptySumDistribution();
+    const mergeBucket = (bucket) => {
+      if (!merged.bins.has(bucket.label)) {
+        merged.bins.set(bucket.label, {
+          value: bucket.value,
+          label: bucket.label,
+          count: 0,
+          compositionTotals: simulation.program.outputNames.map(() => 0),
+        });
+      }
+      const target = merged.bins.get(bucket.label);
+      target.count += bucket.count;
+      bucket.compositionTotals.forEach((value, index) => {
+        target.compositionTotals[index] += value;
+      });
+    };
+    [left, right].forEach((distribution) => {
+      if (!distribution) return;
+      distribution.bins.forEach(mergeBucket);
+      merged.overflow.count += distribution.overflow.count;
+      distribution.overflow.compositionTotals.forEach((value, index) => {
+        merged.overflow.compositionTotals[index] += value;
+      });
+    });
+    return merged;
+  }
+
+  function blendRunSamples(floorRuns, ceilRuns, t) {
+    const floorWeight = Math.max(0, 1 - t);
+    const ceilWeight = Math.max(0, t);
+    const floorTarget = Math.round(floorRuns.length * floorWeight);
+    const ceilTarget = Math.round(ceilRuns.length * ceilWeight);
+    const totalTarget = Math.min(
+      MAX_AUTO_MATRIX_SCATTER_POINTS,
+      floorTarget + ceilTarget
+    );
+    if (totalTarget <= 0) return [];
+
+    const floorShare = floorTarget + ceilTarget > 0 ? floorTarget / (floorTarget + ceilTarget) : 0.5;
+    const floorTake = Math.min(floorRuns.length, Math.round(totalTarget * floorShare));
+    const ceilTake = Math.min(ceilRuns.length, totalTarget - floorTake);
+
+    const blended = [];
+    blended.push(...sampleRunsEvenly(floorRuns, floorTake));
+    blended.push(...sampleRunsEvenly(ceilRuns, ceilTake));
+    return blended;
+  }
+
+  function sampleRunsEvenly(runs, take) {
+    if (take <= 0 || runs.length === 0) return [];
+    if (take >= runs.length) return runs.slice();
+    const sampled = [];
+    const step = runs.length / take;
+    for (let i = 0; i < take; i += 1) {
+      sampled.push(runs[Math.floor(i * step)]);
+    }
+    return sampled;
+  }
+
+  function getVariableRange(index) {
+    if (!simulation) return { min: 0, max: 0 };
+    if (!simulation.completedRunValues || simulation.completedRunValues.length === 0) {
+      const fallback = simulation.currentRun && simulation.currentRun.outputValues
+        ? Number(simulation.currentRun.outputValues[index] || 0)
+        : 0;
+      return { min: fallback, max: fallback };
+    }
+    let min = Infinity, max = -Infinity;
+    simulation.completedRunValues.forEach((values) => {
+      const v = values[index];
+      if (v < min) min = v;
+      if (v > max) max = v;
+    });
+    return { min, max };
+  }
+
+  function renderFixedConditions() {
+    if (!simulation) {
+      nodes.fixedConditions.hidden = true;
+      return;
+    }
+    const fixed = simulation.fixedConditions;
+    nodes.fixedConditions.hidden = false;
+    nodes.fixedSliders.replaceChildren();
+    simulation.program.outputNames.forEach((outputName, index) => {
+      const indexStr = String(index);
+      const condition = fixed[indexStr];
+      const isFixed = Boolean(condition);
+      const { min, max } = getVariableRange(index);
+      const conditionValue = Number(condition ? condition.value : min);
+      const currentValue = Number.isFinite(conditionValue) ? conditionValue : min;
+
+      const row = document.createElement("div");
+      row.className = "fixed-slider-row";
+
+      const enableLabel = document.createElement("label");
+      enableLabel.className = "fixed-enable-toggle";
+      const enableCheck = document.createElement("input");
+      enableCheck.type = "checkbox";
+      enableCheck.className = "fixed-enable-check";
+      enableCheck.checked = isFixed;
+      enableLabel.appendChild(enableCheck);
+
+      const label = document.createElement("span");
+      label.className = "fixed-slider-label";
+      label.textContent = outputName;
+
+      const slider = document.createElement("input");
+      slider.className = "fixed-slider";
+      slider.type = "range";
+      slider.min = String(min);
+      slider.max = String(max);
+      slider.step = "0.01";
+      slider.valueAsNumber = currentValue;
+      slider.dataset.index = indexStr;
+      slider.disabled = !isFixed;
+
+      const valueDisplay = document.createElement("span");
+      valueDisplay.className = "fixed-slider-value";
+      valueDisplay.textContent = formatNumber(currentValue);
+
+      slider.addEventListener("input", () => {
+        if (!fixed[indexStr]) {
+          fixed[indexStr] = { key: "", value: Number(slider.value), label: "", auto: false };
+        }
+        const rowCondition = fixed[indexStr];
+        const val = Math.round(Number(slider.value));
+        slider.valueAsNumber = val;
+        valueDisplay.textContent = formatNumber(val);
+        fixed[indexStr].value = val;
+        fixed[indexStr].key = bucketKey(val);
+        fixed[indexStr].label = formatNumber(val);
+        if (rowCondition.auto) {
+          rowCondition.auto = false;
+          delete rowCondition._autoLastTime;
+          delete rowCondition._autoDirection;
+          delete rowCondition._autoHoldUntil;
+          const autoCheck = slider.closest(".fixed-slider-row").querySelector(".fixed-auto-check");
+          if (autoCheck) autoCheck.checked = false;
+          const hasAuto = Object.values(simulation.fixedConditions).some(c => c.auto);
+          if (!hasAuto) cancelAutoSweep();
+        }
+        drawDistributionCharts();
+      });
+
+      const autoLabel = document.createElement("label");
+      autoLabel.className = "fixed-auto-toggle";
+      const autoCheck = document.createElement("input");
+      autoCheck.type = "checkbox";
+      autoCheck.className = "fixed-auto-check";
+      autoCheck.checked = !!(condition && condition.auto);
+      autoCheck.disabled = !isFixed;
+      autoCheck.addEventListener("change", () => {
+        if (!fixed[indexStr]) {
+          fixed[indexStr] = { key: bucketKey(currentValue), value: currentValue, label: formatNumber(currentValue), auto: false };
+        }
+        const rowCondition = fixed[indexStr];
+        rowCondition.auto = autoCheck.checked;
+        if (autoCheck.checked) {
+          delete rowCondition._autoLastTime;
+          delete rowCondition._autoHoldUntil;
+          rowCondition._autoDirection = Number(rowCondition.value) >= max ? -1 : 1;
+          scheduleAutoSweep();
+        } else {
+          delete rowCondition._autoLastTime;
+          delete rowCondition._autoDirection;
+          delete rowCondition._autoHoldUntil;
+          const hasAuto = Object.values(simulation.fixedConditions).some(c => c.auto);
+          if (!hasAuto) cancelAutoSweep();
+        }
+      });
+      autoLabel.appendChild(autoCheck);
+      autoLabel.appendChild(document.createTextNode("auto"));
+
+      enableCheck.addEventListener("change", () => {
+        if (enableCheck.checked) {
+          const val = Math.round(Number(slider.value));
+          fixed[indexStr] = { key: bucketKey(val), value: val, label: formatNumber(val), auto: false };
+          slider.disabled = false;
+          autoCheck.disabled = false;
+        } else {
+          if (fixed[indexStr] && fixed[indexStr].auto) {
+            delete fixed[indexStr]._autoLastTime;
+            delete fixed[indexStr]._autoDirection;
+            delete fixed[indexStr]._autoHoldUntil;
+          }
+          delete fixed[indexStr];
+          autoCheck.checked = false;
+          autoCheck.disabled = true;
+          slider.disabled = true;
+          const hasAuto = Object.values(simulation.fixedConditions).some(c => c.auto);
+          if (!hasAuto) cancelAutoSweep();
+        }
+        drawDistributionCharts();
+      });
+
+      row.appendChild(enableLabel);
+      row.appendChild(label);
+      row.appendChild(slider);
+      row.appendChild(valueDisplay);
+      row.appendChild(autoLabel);
+      nodes.fixedSliders.appendChild(row);
+    });
+  }
+
+  function advanceAutoSliders(timestamp) {
+    const fixed = simulation.fixedConditions;
+    const entries = Object.keys(fixed).filter((k) => fixed[k].auto);
+    if (entries.length === 0) return;
+    const now = Number.isFinite(timestamp) ? timestamp : performance.now();
+
+    entries.forEach((indexStr) => {
+      const index = Number(indexStr);
+      const condition = fixed[indexStr];
+      const { min, max } = getVariableRange(index);
+      const slider = nodes.fixedSliders.querySelector(`.fixed-slider[data-index="${indexStr}"]`);
+      if (!slider) return;
+      slider.min = String(min);
+      slider.max = String(max);
+      slider.disabled = false;
+
+      const row = slider.closest(".fixed-slider-row");
+      if (row) {
+        const enableCheck = row.querySelector(".fixed-enable-check");
+        const autoCheck = row.querySelector(".fixed-auto-check");
+        if (enableCheck) enableCheck.checked = true;
+        if (autoCheck) {
+          autoCheck.checked = true;
+          autoCheck.disabled = false;
+        }
+      }
+
+      if (condition._autoHoldUntil && condition._autoHoldUntil > now) {
+        condition._autoLastTime = now;
+        updateAutoSliderValue(fixed, indexStr, slider, condition, Number(condition.value));
+        return;
+      }
+      delete condition._autoHoldUntil;
+      if (condition._autoLastTime === undefined) {
+        condition._autoLastTime = now;
+      }
+      const elapsed = Math.min(250, Math.max(0, now - condition._autoLastTime));
+      condition._autoLastTime = now;
+      const current = Number.isFinite(Number(condition.value)) ? Number(condition.value) : min;
+      let val = current + (condition._autoDirection || 1) * (elapsed / AUTO_SWEEP_MS_PER_UNIT);
+      const reflected = reflectSweepValue(val, min, max, condition._autoDirection || 1);
+      val = reflected.value;
+      condition._autoDirection = reflected.direction;
+      if (reflected.hitEndpoint) {
+        condition._autoHoldUntil = now + AUTO_SWEEP_ENDPOINT_HOLD_MS;
+      }
+      updateAutoSliderValue(fixed, indexStr, slider, condition, val);
+    });
+    if (now - simulation._lastAutoSweepDraw >= AUTO_SWEEP_CHART_INTERVAL_MS) {
+      simulation._lastAutoSweepDraw = now;
+      drawDistributionCharts();
+    }
+  }
+
+  function updateAutoSliderValue(fixed, indexStr, slider, condition, value) {
+    const val = Math.round(value * 100) / 100;
+    slider.valueAsNumber = val;
+    fixed[indexStr].value = val;
+    fixed[indexStr].key = bucketKey(val);
+    fixed[indexStr].label = formatNumber(val);
+    const row = slider.closest(".fixed-slider-row");
+    if (row) {
+      const display = row.querySelector(".fixed-slider-value");
+      if (display) display.textContent = formatNumber(val);
+      const enableCheck = row.querySelector(".fixed-enable-check");
+      const autoCheck = row.querySelector(".fixed-auto-check");
+      if (enableCheck) enableCheck.checked = true;
+      if (autoCheck) autoCheck.checked = !!condition.auto;
+    }
+  }
+
+  function reflectSweepValue(value, min, max, direction) {
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) {
+      return { value: Number.isFinite(min) ? min : 0, direction: 1, hitEndpoint: true };
+    }
+
+    if (value >= max) {
+      return { value: max, direction: -1, hitEndpoint: true };
+    }
+    if (value <= min) {
+      return { value: min, direction: 1, hitEndpoint: true };
+    }
+    return { value, direction: direction || 1, hitEndpoint: false };
+  }
+
+  function scheduleAutoSweep() {
+    if (autoSweepRaf || !simulation) return;
+    const hasAuto = Object.values(simulation.fixedConditions).some(c => c.auto);
+    if (!hasAuto) return;
+    function frame(timestamp) {
+      if (!simulation) { autoSweepRaf = null; return; }
+      const stillHasAuto = Object.values(simulation.fixedConditions).some(c => c.auto);
+      if (!stillHasAuto) { autoSweepRaf = null; return; }
+      advanceAutoSliders(timestamp);
+      autoSweepRaf = requestAnimationFrame(frame);
+    }
+    autoSweepRaf = requestAnimationFrame(frame);
+  }
+
+  function cancelAutoSweep() {
+    if (autoSweepRaf) {
+      cancelAnimationFrame(autoSweepRaf);
+      autoSweepRaf = null;
+    }
+  }
+
+  function marginalBuckets(distributions) {
+    const dists = distributions || simulation.outputDistributions;
     const buckets = new Map();
-    simulation.outputDistributions.forEach((distribution, outputIndex) => {
+    dists.forEach((distribution, outputIndex) => {
       distribution.bins.forEach((bucket, key) => {
         if (!buckets.has(key)) {
           buckets.set(key, {
@@ -971,29 +1880,55 @@ run_for 40`,
     return Array.from(buckets.values()).sort(compareBucketValues);
   }
 
-  function sumBuckets() {
-    const buckets = Array.from(simulation.sumDistribution.bins.values()).sort(compareBucketValues);
-    if (simulation.sumDistribution.overflow.count > 0) {
+  function sumBuckets(distribution) {
+    const source = distribution || simulation.sumDistribution;
+    const buckets = Array.from(source.bins.values()).sort(compareBucketValues);
+    if (source.overflow.count > 0) {
       buckets.push({
         value: Number.POSITIVE_INFINITY,
         label: "other",
-        count: simulation.sumDistribution.overflow.count,
-        compositionTotals: simulation.sumDistribution.overflow.compositionTotals.slice(),
+        count: source.overflow.count,
+        compositionTotals: source.overflow.compositionTotals.slice(),
       });
     }
     return buckets;
   }
 
-  function conditionalBuckets(distribution) {
-    const buckets = Array.from(distribution.bins.values()).sort(compareBucketValues);
-    if (distribution.overflow > 0) {
-      buckets.push({
+  function conditionalSumBucket(globalBucket, distribution) {
+    if (globalBucket.label === "other") {
+      return {
         value: Number.POSITIVE_INFINITY,
         label: "other",
-        count: distribution.overflow,
-      });
+        count: distribution.overflow.count,
+        compositionTotals: distribution.overflow.compositionTotals.slice(),
+      };
     }
-    return buckets;
+    const bucket = distribution.bins.get(globalBucket.label);
+    if (bucket) return bucket;
+    return {
+      value: globalBucket.value,
+      label: globalBucket.label,
+      count: 0,
+      compositionTotals: simulation.program.outputNames.map(() => 0),
+    };
+  }
+
+  function emptySumBucketLike(globalBucket) {
+    return {
+      value: globalBucket.value,
+      label: globalBucket.label,
+      count: 0,
+      compositionTotals: simulation.program.outputNames.map(() => 0),
+    };
+  }
+
+  function compareBucketValuesByKey(a, b) {
+    const na = Number(a);
+    const nb = Number(b);
+    if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+    if (Number.isFinite(na)) return -1;
+    if (Number.isFinite(nb)) return 1;
+    return String(a).localeCompare(String(b));
   }
 
   function compareBucketValues(a, b) {
@@ -1011,14 +1946,28 @@ run_for 40`,
   }
 
   function drawEmptyChart(canvas, text) {
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const { ctx, width, height } = prepareCanvas(canvas);
+    ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = "#687386";
     ctx.font = "16px system-ui, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+    ctx.fillText(text, width / 2, height / 2);
+  }
+
+  function drawEmptyHistogramAxes(canvas) {
+    const { ctx, width, height } = prepareCanvas(canvas);
+    const inset = { left: 42, right: 18, top: 18, bottom: 36 };
+    const plotHeight = height - inset.top - inset.bottom;
+    drawChartFrame(ctx, width, height, inset);
+    drawYAxisLabels(ctx, inset, plotHeight, 1);
+  }
+
+  function drawEmptyMatrixAxes(canvas) {
+    const { ctx, width, height } = prepareCanvas(canvas);
+    const inset = { left: 52, right: 18, top: 18, bottom: 48 };
+    drawChartFrame(ctx, width, height, inset);
   }
 
   function outputColor(index) {
@@ -1043,12 +1992,6 @@ run_for 40`,
     if (Math.abs(number) >= 1000) return number.toLocaleString(undefined, { maximumFractionDigits: 2 });
     if (Number.isInteger(number)) return String(number);
     return number.toFixed(3).replace(/\.?0+$/, "");
-  }
-
-  function formatPercent(value) {
-    const percent = Number(value) * 100;
-    if (percent >= 10 || Number.isInteger(percent)) return `${Math.round(percent)}%`;
-    return `${percent.toFixed(1)}%`;
   }
 
   function formatAxisValue(value) {

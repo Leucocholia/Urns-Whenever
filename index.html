@@ -42,13 +42,12 @@
               <input id="seed-input" type="text" value="whichever">
             </label>
             <label>
-              FPS
-              <input id="fps-input" type="range" min="1" max="600" step="1" value="2">
+              Delay
+              <input id="fps-input" type="range" min="0" max="1000" step="1" value="500">
             </label>
-            <div class="fps-readout" id="fps-readout">2 FPS</div>
+            <div class="fps-readout" id="fps-readout">500 ms</div>
             <div class="playback-buttons" aria-label="Playback controls">
               <button id="play-button" class="primary-button" type="button">Play</button>
-              <button id="pause-button" class="secondary-button" type="button">Pause</button>
             </div>
           </div>
 
@@ -60,7 +59,6 @@
                 <h2>Current Run</h2>
                 <span id="run-meta" class="subtle"></span>
               </div>
-              <div id="state-caption" class="state-caption"></div>
               <div id="state-snapshot" class="urn-state" aria-live="polite"></div>
             </section>
 
@@ -75,6 +73,23 @@
                     <div class="control-title">Streams</div>
                     <div id="stream-controls" class="stream-controls" aria-label="Output stream visibility"></div>
                   </div>
+                  <fieldset id="distribution-view-controls" class="segmented-control">
+                    <legend>View</legend>
+                    <div class="segmented-options">
+                      <label>
+                        <input type="radio" name="distribution-view" value="outputs" checked>
+                        <span>Outputs</span>
+                      </label>
+                      <label>
+                        <input type="radio" name="distribution-view" value="sum">
+                        <span>Sum</span>
+                      </label>
+                      <label>
+                        <input type="radio" name="distribution-view" value="joint">
+                        <span>Joint</span>
+                      </label>
+                    </div>
+                  </fieldset>
                   <fieldset id="histogram-mode-controls" class="segmented-control">
                     <legend>Layout</legend>
                     <div class="segmented-options">
@@ -93,23 +108,24 @@
                     </div>
                   </fieldset>
                 </div>
-                <div class="chart-block">
+                <div id="fixed-conditions" class="fixed-conditions" hidden>
+                  <div class="fixed-heading">
+                    <span class="fixed-conditions-label">Fixed:</span>
+                    <button id="fixed-clear" class="secondary-button compact-button" type="button">Clear</button>
+                  </div>
+                  <div id="fixed-sliders"></div>
+                </div>
+                <div class="chart-block" id="outputs-chart-block">
                   <div class="chart-title">Outputs</div>
                   <canvas id="marginal-chart" width="900" height="310" role="img" aria-label="Marginal histogram for each output variable"></canvas>
                 </div>
-                <div class="chart-block">
+                <div id="matrix-chart-block" class="chart-block" hidden>
+                  <div id="matrix-chart-title" class="chart-title">Joint</div>
+                  <canvas id="matrix-chart" width="900" height="420" role="img" aria-label="3D scatter plot of three output variables"></canvas>
+                </div>
+                <div class="chart-block" id="sum-chart-block">
                   <div class="chart-title">Sum</div>
                   <canvas id="sum-chart" width="900" height="310" role="img" aria-label="Stacked histogram of total output size"></canvas>
-                </div>
-                <div id="conditional-panel" class="conditional-panel" hidden>
-                  <div class="conditional-heading">
-                    <div>
-                      <div class="chart-title">Conditional</div>
-                      <div id="conditional-title" class="conditional-title"></div>
-                    </div>
-                    <button id="conditional-clear" class="secondary-button compact-button" type="button">Clear</button>
-                  </div>
-                  <div id="conditional-charts" class="conditional-charts"></div>
                 </div>
               </div>
             </section>

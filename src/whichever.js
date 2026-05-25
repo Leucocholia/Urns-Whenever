@@ -11,7 +11,7 @@
   const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
   const SEED_STEP = 0x9E3779B9;
   const RESERVED_SECTIONS = new Set(["presets", "outputs"]);
-  const ALLOWED_FUNCTIONS = Object.freeze({
+  const BASE_FUNCTIONS = Object.freeze({
     abs: Math.abs,
     min: Math.min,
     max: Math.max,
@@ -19,6 +19,19 @@
     ceil: Math.ceil,
     round: Math.round,
   });
+  const RANDOM_FUNCTION_NAMES = new Set([
+    "uniform",
+    "randint",
+    "flip",
+    "binomial",
+    "multinomial",
+    "geometric",
+    "poisson",
+  ]);
+  const ALLOWED_FUNCTION_NAMES = new Set([
+    ...Object.keys(BASE_FUNCTIONS),
+    ...Array.from(RANDOM_FUNCTION_NAMES),
+  ]);
 
   class WhicheverError extends Error {
     constructor(message, line) {
@@ -200,6 +213,56 @@
     return bare ? bare[1].trim() : null;
   }
 
+  function parseTopLevelShorthand(text) {
+    const match = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$/);
+    if (!match) return null;
+    const kind = match[1];
+    if (!["multinomial", "replacement", "hypergeometric", "polya", "reinforcement"].includes(kind)) return null;
+    const args = splitTopLevel(match[2], ",");
+    return {
+      type: "distribution_shorthand",
+      kind,
+      args,
+      source: text,
+    };
+  }
+
+  function uniqueGeneratedName(slots, base) {
+    let name = base;
+    let suffix = 1;
+    while (slots.has(name)) {
+      suffix += 1;
+      name = `${base}_${suffix}`;
+    }
+    return name;
+  }
+
+  function letterName(index) {
+    let n = index;
+    let out = "";
+    do {
+      out = String.fromCharCode(97 + (n % 26)) + out;
+      n = Math.floor(n / 26) - 1;
+    } while (n >= 0);
+    return out;
+  }
+
+  function shorthandBehavior(kind) {
+    if (kind === "multinomial" || kind === "replacement") {
+      return { sourceDeltaExpr: "0", outputDeltaExpr: "1", weightOffset: 0 };
+    }
+    if (kind === "hypergeometric") {
+      return { sourceDeltaExpr: "-1", outputDeltaExpr: "1", weightOffset: 0 };
+    }
+    if (kind === "polya") {
+      return { sourceDeltaExpr: "1", outputDeltaExpr: "1", weightOffset: 0 };
+    }
+    if (kind === "reinforcement") {
+      return { sourceDeltaExpr: null, outputDeltaExpr: "1", weightOffset: 1 };
+    }
+    return null;
+  }
+
   function parseProgram(source) {
     const errors = [];
     const warnings = [];
@@ -210,6 +273,7 @@
     let runForLine = null;
     let runUntilExpr = null;
     let runUntilLine = null;
+    const shorthandCalls = [];
     const lines = String(source || "").replace(/\r\n/g, "\n").split("\n");
 
     lines.forEach((raw, index) => {
@@ -222,6 +286,7 @@
       if (indent === 0) {
         const runUntil = text.match(/^run_until\s*\((.*)\)\s*$/);
         const runFor = parseRunFor(text);
+        const shorthand = parseTopLevelShorthand(text);
         if (runUntil || runFor != null) {
           if (runMode) {
             errors.push({ line, message: "A program may have only one run_for or run_until clause." });
@@ -234,6 +299,12 @@
             runForExpr = runFor;
             runForLine = line;
           }
+          current = null;
+          return;
+        }
+        if (shorthand) {
+          shorthand.line = line;
+          shorthandCalls.push(shorthand);
           current = null;
           return;
         }
@@ -280,6 +351,67 @@
         }
         labels.push(parseBody(section, slots));
       });
+
+      if (shorthandCalls.length > 0) {
+        hasPresets = true;
+        hasOutputs = true;
+        shorthandCalls.forEach((call, callIndex) => {
+          const behavior = shorthandBehavior(call.kind);
+          if (!behavior) throw new WhicheverError(`Unsupported shorthand "${call.kind}".`, call.line);
+          const weightArgs = call.args.slice(behavior.weightOffset || 0);
+          if (weightArgs.length === 0) {
+            throw new WhicheverError(`${call.kind}(...) shorthand needs at least one weight.`, call.line);
+          }
+          const sourceDeltaExpr = behavior.sourceDeltaExpr == null
+            ? call.args[0]
+            : behavior.sourceDeltaExpr;
+          weightArgs.forEach((_, argIndex) => {
+            const base = shorthandCalls.length === 1
+              ? letterName(argIndex)
+              : `${call.kind.slice(0, 1)}${callIndex + 1}_${letterName(argIndex)}`;
+            const urnName = uniqueGeneratedName(slots, base);
+            const outName = uniqueGeneratedName(slots, `${base}_`);
+
+            const urnSlot = ensureSlot(slots, urnName);
+            urnSlot.presetExpr = weightArgs[argIndex];
+            urnSlot.presetLine = call.line;
+
+            const outSlot = ensureSlot(slots, outName);
+            outSlot.presetExpr = "0";
+            outSlot.presetLine = call.line;
+            if (!outSlot.output) {
+              outSlot.output = true;
+              outputNames.push(outName);
+            }
+
+            const statements = [];
+            if (sourceDeltaExpr && String(sourceDeltaExpr).trim() !== "0") {
+              statements.push({
+                type: "augment",
+                name: urnName,
+                op: "+=",
+                expr: sourceDeltaExpr,
+                line: call.line,
+                source: `${urnName} += ${sourceDeltaExpr}`,
+              });
+            }
+            statements.push({
+              type: "augment",
+              name: outName,
+              op: "+=",
+              expr: behavior.outputDeltaExpr,
+              line: call.line,
+              source: `${outName} += ${behavior.outputDeltaExpr}`,
+            });
+
+            labels.push({
+              name: urnName,
+              line: call.line,
+              statements,
+            });
+          });
+        });
+      }
     } catch (error) {
       if (error instanceof WhicheverError) {
         errors.push({ line: error.line, message: error.message.replace(/^Line \d+: /, "") });
@@ -343,7 +475,7 @@
     const js = normalized.replace(/\b[A-Za-z_][A-Za-z0-9_]*\b/g, (name, offset) => {
       if (name === "true" || name === "false") return name;
       const after = normalized.slice(offset + name.length);
-      if (Object.prototype.hasOwnProperty.call(ALLOWED_FUNCTIONS, name) && /^\s*\(/.test(after)) {
+      if (ALLOWED_FUNCTION_NAMES.has(name) && /^\s*\(/.test(after)) {
         return `__f.${name}`;
       }
       return `(__s[${JSON.stringify(name)}] ?? 0)`;
@@ -352,8 +484,9 @@
     let fn;
     try {
       fn = new Function("__s", "__f", `"use strict"; return (${js});`);
-      fn(Object.create(null), ALLOWED_FUNCTIONS);
+      fn(Object.create(null), expressionFunctions(() => 0.5, line));
     } catch (error) {
+      if (error instanceof WhicheverError) throw error;
       throw new WhicheverError(`Invalid expression "${expr}".`, line);
     }
 
@@ -361,8 +494,13 @@
     return fn;
   }
 
-  function evalExpression(expr, state, line) {
-    return compileExpression(expr, line)(state, ALLOWED_FUNCTIONS);
+  function evalExpression(expr, state, line, rng) {
+    try {
+      return compileExpression(expr, line)(state, expressionFunctions(rng, line));
+    } catch (error) {
+      if (error instanceof WhicheverError) throw error;
+      throw new WhicheverError(error && error.message ? error.message : `Invalid expression "${expr}".`, line);
+    }
   }
 
   function numeric(value, context, line) {
@@ -398,13 +536,100 @@
     };
   }
 
-  function initialState(program) {
+  function expressionFunctions(rng, line) {
+    const random = typeof rng === "function" ? rng : Math.random;
+
+    function requireFinite(value, name) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) throw new WhicheverError(`${name} must be finite.`, line);
+      return number;
+    }
+
+    function requireProbability(value, name) {
+      const number = requireFinite(value, name);
+      if (number < 0 || number > 1) throw new WhicheverError(`${name} must be between 0 and 1.`, line);
+      return number;
+    }
+
+    function requireNonNegativeInt(value, name) {
+      const number = Math.floor(requireFinite(value, name));
+      if (number < 0) throw new WhicheverError(`${name} must be non-negative.`, line);
+      return number;
+    }
+
+    return Object.assign(Object.create(null), BASE_FUNCTIONS, {
+      uniform(a, b) {
+        const min = requireFinite(a, "uniform min");
+        const max = requireFinite(b, "uniform max");
+        if (max < min) throw new WhicheverError("uniform max must be >= min.", line);
+        return min + (max - min) * random();
+      },
+      randint(a, b) {
+        const min = Math.ceil(requireFinite(a, "randint min"));
+        const max = Math.floor(requireFinite(b, "randint max"));
+        if (max < min) throw new WhicheverError("randint max must be >= min.", line);
+        return min + Math.floor(random() * (max - min + 1));
+      },
+      flip(p) {
+        const prob = p === undefined ? 0.5 : requireProbability(p, "flip p");
+        return random() < prob ? 1 : 0;
+      },
+      binomial(n, p) {
+        const trials = requireNonNegativeInt(n, "binomial n");
+        const prob = requireProbability(p, "binomial p");
+        let successes = 0;
+        for (let i = 0; i < trials; i += 1) {
+          if (random() < prob) successes += 1;
+        }
+        return successes;
+      },
+      multinomial(...weights) {
+        if (weights.length === 0) {
+          throw new WhicheverError("multinomial needs at least one weight.", line);
+        }
+        const clean = weights.map((weight, index) => {
+          const value = requireFinite(weight, `multinomial weight ${index + 1}`);
+          if (value < 0) throw new WhicheverError("multinomial weights must be >= 0.", line);
+          return value;
+        });
+        const total = clean.reduce((sum, value) => sum + value, 0);
+        if (total <= 0) throw new WhicheverError("multinomial needs a positive total weight.", line);
+        let pick = random() * total;
+        for (let index = 0; index < clean.length; index += 1) {
+          pick -= clean[index];
+          if (pick <= 0) return index;
+        }
+        return clean.length - 1;
+      },
+      geometric(p) {
+        const prob = requireProbability(p, "geometric p");
+        if (prob === 0) throw new WhicheverError("geometric p must be > 0.", line);
+        if (prob === 1) return 0;
+        return Math.floor(Math.log(1 - random()) / Math.log(1 - prob));
+      },
+      poisson(lambda) {
+        const rate = requireFinite(lambda, "poisson lambda");
+        if (rate < 0) throw new WhicheverError("poisson lambda must be >= 0.", line);
+        if (rate === 0) return 0;
+        const limit = Math.exp(-rate);
+        let product = 1;
+        let k = 0;
+        while (product > limit) {
+          k += 1;
+          product *= random();
+        }
+        return k - 1;
+      },
+    });
+  }
+
+  function initialState(program, rng) {
     const state = Object.create(null);
     program.slots.forEach((slot) => {
       state[slot.name] = 0;
     });
     program.slots.forEach((slot) => {
-      state[slot.name] = numeric(evalExpression(slot.presetExpr, state, slot.presetLine), "preset", slot.presetLine);
+      state[slot.name] = numeric(evalExpression(slot.presetExpr, state, slot.presetLine, rng), "preset", slot.presetLine);
     });
     return state;
   }
@@ -441,14 +666,14 @@
   function executeStatement(statement, state, rng, recorder) {
     if (statement.type === "assign") {
       const before = recorder ? cloneState(state) : null;
-      state[statement.name] = numeric(evalExpression(statement.expr, state, statement.line), "assignment", statement.line);
+      state[statement.name] = numeric(evalExpression(statement.expr, state, statement.line, rng), "assignment", statement.line);
       recordInstruction(statement, state, before, recorder);
       return;
     }
     if (statement.type === "augment") {
       const before = recorder ? cloneState(state) : null;
       const current = numeric(state[statement.name] || 0, "current value", statement.line);
-      const value = numeric(evalExpression(statement.expr, state, statement.line), "assignment", statement.line);
+      const value = numeric(evalExpression(statement.expr, state, statement.line, rng), "assignment", statement.line);
       if (statement.op === "+=") state[statement.name] = current + value;
       if (statement.op === "-=") state[statement.name] = current - value;
       if (statement.op === "*=") state[statement.name] = current * value;
@@ -459,7 +684,7 @@
     }
     if (statement.type === "tuple") {
       const before = recorder ? cloneState(state) : null;
-      const values = statement.exprs.map((expr) => numeric(evalExpression(expr, state, statement.line), "tuple assignment", statement.line));
+      const values = statement.exprs.map((expr) => numeric(evalExpression(expr, state, statement.line, rng), "tuple assignment", statement.line));
       statement.names.forEach((name, index) => {
         state[name] = values[index];
       });
@@ -470,7 +695,7 @@
       const options = statement.options
         .map((option) => ({
           option,
-          weight: numeric(evalExpression(option.weightExpr, state, option.line), "choose weight", option.line),
+          weight: numeric(evalExpression(option.weightExpr, state, option.line, rng), "choose weight", option.line),
         }))
         .filter((entry) => entry.weight > 0);
       if (options.length === 0) throw new WhicheverError("choose: has no positive-weight options.", statement.line);
@@ -515,10 +740,10 @@
       throw new WhicheverError(program.errors.map((error) => error.message).join("\n"));
     }
     const opts = Object.assign({ seed: "whichever", traceLimit: 80, instructionTraceLimit: 240, safetySteps: 10000 }, options || {});
-    const state = initialState(program);
-    const maxSteps = runLimit(program, state, Math.max(1, Math.floor(Number(opts.safetySteps) || 10000)));
     const seedNumber = typeof opts.seedNumber === "number" ? opts.seedNumber >>> 0 : hashSeed(opts.seed);
     const rng = opts.rng || makeRng(seedNumber);
+    const state = initialState(program, rng);
+    const maxSteps = runLimit(program, state, Math.max(1, Math.floor(Number(opts.safetySteps) || 10000)));
     const trace = [];
     const instructionTrace = [];
     let reason = null;
@@ -537,7 +762,7 @@
     }
 
     for (; steps < maxSteps; steps += 1) {
-      if (program.runMode === "until" && Boolean(evalExpression(program.runUntilExpr, state, program.runUntilLine))) {
+      if (program.runMode === "until" && Boolean(evalExpression(program.runUntilExpr, state, program.runUntilLine, rng))) {
         reason = "run_until";
         break;
       }
@@ -576,7 +801,7 @@
         });
       }
 
-      if (program.runMode === "until" && Boolean(evalExpression(program.runUntilExpr, state, program.runUntilLine))) {
+      if (program.runMode === "until" && Boolean(evalExpression(program.runUntilExpr, state, program.runUntilLine, rng))) {
         steps += 1;
         reason = "run_until";
         break;
@@ -697,9 +922,66 @@
       "def run(seed=None, safety_steps=10000):",
       "    rng = random.Random(seed)",
       "    state = {}",
+      "    def _uniform(a, b):",
+      "        if b < a:",
+      "            raise RuntimeError('uniform max must be >= min')",
+      "        return rng.uniform(a, b)",
+      "    def _randint(a, b):",
+      "        lo = int(math.ceil(a))",
+      "        hi = int(math.floor(b))",
+      "        if hi < lo:",
+      "            raise RuntimeError('randint max must be >= min')",
+      "        return rng.randint(lo, hi)",
+      "    def _flip(p=0.5):",
+      "        if p < 0 or p > 1:",
+      "            raise RuntimeError('flip p must be between 0 and 1')",
+      "        return 1 if rng.random() < p else 0",
+      "    def _binomial(n, p):",
+      "        if p < 0 or p > 1:",
+      "            raise RuntimeError('binomial p must be between 0 and 1')",
+      "        trials = max(0, int(n))",
+      "        return sum(1 for _ in range(trials) if rng.random() < p)",
+      "    def _multinomial(*weights):",
+      "        if not weights:",
+      "            raise RuntimeError('multinomial needs at least one weight')",
+      "        clean = []",
+      "        for w in weights:",
+      "            if not math.isfinite(w):",
+      "                raise RuntimeError('multinomial weights must be finite')",
+      "            if w < 0:",
+      "                raise RuntimeError('multinomial weights must be >= 0')",
+      "            clean.append(w)",
+      "        total = sum(clean)",
+      "        if total <= 0:",
+      "            raise RuntimeError('multinomial needs a positive total weight')",
+      "        pick = rng.random() * total",
+      "        for i, w in enumerate(clean):",
+      "            pick -= w",
+      "            if pick <= 0:",
+      "                return i",
+      "        return len(clean) - 1",
+      "    def _geometric(p):",
+      "        if p <= 0 or p > 1:",
+      "            raise RuntimeError('geometric p must be in (0, 1]')",
+      "        if p >= 1:",
+      "            return 0",
+      "        return int(math.log(1 - rng.random()) / math.log(1 - p))",
+      "    def _poisson(lam):",
+      "        if lam < 0:",
+      "            raise RuntimeError('poisson lambda must be >= 0')",
+      "        if lam == 0:",
+      "            return 0",
+      "        limit = math.exp(-lam)",
+      "        k = 0",
+      "        prod = 1.0",
+      "        while prod > limit:",
+      "            k += 1",
+      "            prod *= rng.random()",
+      "        return k - 1",
       "    def E(expr):",
       "        names = {**math.__dict__, **state}",
       "        names.update({'abs': abs, 'min': min, 'max': max, 'round': round})",
+      "        names.update({'uniform': _uniform, 'randint': _randint, 'flip': _flip, 'binomial': _binomial, 'multinomial': _multinomial, 'geometric': _geometric, 'poisson': _poisson})",
       "        return eval(expr, {'__builtins__': {}}, names)",
     ];
 

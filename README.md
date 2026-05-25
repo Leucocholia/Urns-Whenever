@@ -52,7 +52,18 @@ choose:
   y += 1 weight 1
 ```
 
-Expressions support numbers, state names, `+ - * / %`, comparisons, `&& || !`, parentheses, and `abs`, `min`, `max`, `floor`, `ceil`, `round`.
+Expressions support numbers, state names, `+ - * / %`, comparisons, `&& || !`, parentheses, and helpers:
+
+- `abs`, `min`, `max`, `floor`, `ceil`, `round`
+- `uniform(a, b)` random real in `[a, b]`
+- `randint(a, b)` random integer in `[ceil(a), floor(b)]`
+- `flip(p)` Bernoulli draw returning `0` or `1`
+- `binomial(n, p)` binomial draw (number of successes)
+- `multinomial(w1, w2, ...)` categorical draw returning index `0..k-1`
+- `geometric(p)` geometric draw (failures before first success)
+- `poisson(lambda)` Poisson draw
+
+Comments are supported with `#` or `//`.
 
 ## Simulation UI
 
@@ -109,4 +120,94 @@ n_left:
   (a, b) = (b, a + b)
 
 run_until (n_left == 0)
+```
+
+Distribution shorthands (auto-generate presets, outputs, and labels):
+
+```whichever
+multinomial(3, 2)
+replacement(3, 2)
+reinforcement(0, 3, 2)
+hypergeometric(5, 7)
+polya(1, 1)
+
+run_for 1
+```
+
+Behavior:
+- `multinomial(...)` and `replacement(...)`: with replacement (`a_ += 1` on draw)
+- `hypergeometric(...)`: without replacement (`a -= 1; a_ += 1`)
+- `polya(...)`: reinforcing draw (`a += 1; a_ += 1`)
+- `reinforcement(delta, w1, w2, ...)`: generalized form (`a += delta; a_ += 1`)
+
+`replacement(...)` is retained as a convenience alias for `reinforcement(0, ...)`.
+
+Binomial example (`n=12`, `p=0.6` via weights `3:2`):
+
+```whichever
+presets:
+  success: 3
+  failure: 2
+  successes: 0
+  failures: 0
+
+outputs:
+  successes
+  failures
+
+success:
+  successes += 1
+
+failure:
+  failures += 1
+
+run_for 12
+```
+
+Hypergeometric example (`N=12`, `K=5`, `n=8`, without replacement):
+
+```whichever
+presets:
+  success_pool: 5
+  failure_pool: 7
+  successes: 0
+  failures: 0
+
+outputs:
+  successes
+  failures
+
+success_pool:
+  success_pool -= 1
+  successes += 1
+
+failure_pool:
+  failure_pool -= 1
+  failures += 1
+
+run_for 8
+```
+
+Polya distribution example (self-reinforcing urn):
+
+```whichever
+presets:
+  red: 1
+  blue: 1
+  red_out: 0
+  blue_out: 0
+
+outputs:
+  red_out
+  blue_out
+
+red:
+  red += 1
+  red_out += 1
+
+blue:
+  blue += 1
+  blue_out += 1
+
+run_for 30
 ```
