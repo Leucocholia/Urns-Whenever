@@ -47,6 +47,9 @@ output:
   const run = W.runOne(program, { maxSteps: 10, seed: "coin" });
   assert.equal(run.outputs.heads_out + run.outputs.tails_out, 10);
   assert.equal(run.steps, 10);
+  assert.equal(run.instructionTrace.length, 11);
+  assert.deepEqual(Object.keys(run.instructionTrace[0].state).sort(), ["heads", "heads_out", "tails", "tails_out"]);
+  assert.equal(run.instructionTrace[10].state.heads_out + run.instructionTrace[10].state.tails_out, 10);
 }
 
 {
@@ -58,6 +61,9 @@ output:
   assert.equal(run.state.a, 5);
   assert.equal(run.state.b, 8);
   assert.equal(run.state.n_left, 0);
+  assert.equal(run.instructionTrace.length, 11);
+  assert.equal(run.instructionTrace[1].statement, "n_left -= 1");
+  assert.equal(run.instructionTrace[2].state.a, 1);
 }
 
 {

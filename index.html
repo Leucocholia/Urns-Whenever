@@ -19,7 +19,7 @@
             <select id="example-select" aria-label="Example program"></select>
           </label>
           <button id="run-button" class="primary-button" type="button" title="Run simulation">
-            <span aria-hidden="true">▶</span>
+            <span aria-hidden="true">&gt;</span>
             Run
           </button>
         </div>
@@ -57,6 +57,14 @@
               Chart value
               <select id="chart-variable" aria-label="Chart variable"></select>
             </label>
+            <label>
+              Playback
+              <select id="playback-speed" aria-label="Playback speed">
+                <option value="650" selected>Human</option>
+                <option value="1200">Slow</option>
+                <option value="0">Instant</option>
+              </select>
+            </label>
           </div>
 
           <div id="messages" class="messages" aria-live="polite"></div>
@@ -76,6 +84,21 @@
                 <span id="chart-meta" class="subtle"></span>
               </div>
               <canvas id="histogram" width="900" height="360" role="img" aria-label="Histogram of selected final value"></canvas>
+            </section>
+
+            <section class="panel state-panel" aria-label="Instruction state inspector">
+              <div class="pane-heading">
+                <h2>State</h2>
+                <span id="playback-meta" class="subtle">instruction snapshots</span>
+              </div>
+              <div class="state-tools">
+                <label>
+                  Instruction
+                  <select id="instruction-select" aria-label="Instruction snapshot"></select>
+                </label>
+                <div id="state-caption" class="state-caption"></div>
+              </div>
+              <pre id="state-snapshot"></pre>
             </section>
 
             <section class="panel trace-panel" aria-label="First run trace">

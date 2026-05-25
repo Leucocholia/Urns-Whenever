@@ -82,7 +82,7 @@
   function parseStatement(text, line) {
     const preset = text.match(/^preset\s+(.+)$/);
     if (preset) {
-      return { type: "preset", expr: preset[1].trim(), line };
+      return { type: "preset", expr: preset[1].trim(), line, source: text };
     }
 
     const tuple = text.match(/^\(([^)]+)\)\s*=\s*\((.*)\)$/);
@@ -95,7 +95,7 @@
       names.forEach((name) => {
         if (!IDENTIFIER.test(name)) throw new WhicheverError(`Invalid tuple target "${name}".`, line);
       });
-      return { type: "tuple", names, exprs, line };
+      return { type: "tuple", names, exprs, line, source: text };
     }
 
     const augment = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(\+=|-=|\*=|\/=|%=)\s*(.+)$/);
@@ -106,12 +106,13 @@
         op: augment[2],
         expr: augment[3].trim(),
         line,
+        source: text,
       };
     }
 
     const assign = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
     if (assign) {
-      return { type: "assign", name: assign[1], expr: assign[2].trim(), line };
+      return { type: "assign", name: assign[1], expr: assign[2].trim(), line, source: text };
     }
 
     throw new WhicheverError(`Could not parse statement "${text}".`, line);
@@ -145,7 +146,7 @@
         if (options.length === 0) {
           throw new WhicheverError("choose: needs at least one weighted option.", item.line);
         }
-        statements.push({ type: "choose", options, line: item.line });
+        statements.push({ type: "choose", options, line: item.line, source: item.text });
         index = optionIndex - 1;
         continue;
       }
@@ -373,12 +374,33 @@
       .map((key) => ({ name: key, before: before[key] || 0, after: after[key] || 0 }));
   }
 
-  function executeStatement(statement, state, rng) {
+  function recordInstruction(statement, state, before, recorder) {
+    if (!recorder) return;
+    recorder({
+      line: statement.line,
+      statement: statement.source || describeStatement(statement),
+      changes: diffState(before, state),
+      state: cloneState(state),
+    });
+  }
+
+  function describeStatement(statement) {
+    if (statement.type === "assign") return `${statement.name} = ${statement.expr}`;
+    if (statement.type === "augment") return `${statement.name} ${statement.op} ${statement.expr}`;
+    if (statement.type === "tuple") return `(${statement.names.join(", ")}) = (${statement.exprs.join(", ")})`;
+    if (statement.type === "choose") return "choose:";
+    return statement.type;
+  }
+
+  function executeStatement(statement, state, rng, recorder) {
     if (statement.type === "assign") {
+      const before = recorder ? cloneState(state) : null;
       state[statement.name] = numeric(evalExpression(statement.expr, state, statement.line), "assignment", statement.line);
+      recordInstruction(statement, state, before, recorder);
       return;
     }
     if (statement.type === "augment") {
+      const before = recorder ? cloneState(state) : null;
       const current = numeric(state[statement.name] || 0, "current value", statement.line);
       const value = numeric(evalExpression(statement.expr, state, statement.line), "assignment", statement.line);
       if (statement.op === "+=") state[statement.name] = current + value;
@@ -386,13 +408,16 @@
       if (statement.op === "*=") state[statement.name] = current * value;
       if (statement.op === "/=") state[statement.name] = current / value;
       if (statement.op === "%=") state[statement.name] = current % value;
+      recordInstruction(statement, state, before, recorder);
       return;
     }
     if (statement.type === "tuple") {
+      const before = recorder ? cloneState(state) : null;
       const values = statement.exprs.map((expr) => numeric(evalExpression(expr, state, statement.line), "tuple assignment", statement.line));
       statement.names.forEach((name, index) => {
         state[name] = values[index];
       });
+      recordInstruction(statement, state, before, recorder);
       return;
     }
     if (statement.type === "choose") {
@@ -409,7 +434,7 @@
         pick -= entry.weight;
         return pick <= 0;
       }) || options[options.length - 1];
-      executeStatement(selected.option.statement, state, rng);
+      executeStatement(selected.option.statement, state, rng, recorder);
     }
   }
 
@@ -426,14 +451,27 @@
     if (program.errors.length > 0) {
       throw new WhicheverError(program.errors.map((error) => error.message).join("\n"));
     }
-    const opts = Object.assign({ maxSteps: 100, seed: "whichever", traceLimit: 80 }, options || {});
+    const opts = Object.assign({ maxSteps: 100, seed: "whichever", traceLimit: 80, instructionTraceLimit: 240 }, options || {});
     const maxSteps = Math.max(0, Math.floor(Number(opts.maxSteps) || 0));
     const state = initialState(program);
     const seedNumber = typeof opts.seedNumber === "number" ? opts.seedNumber >>> 0 : hashSeed(opts.seed);
     const rng = opts.rng || makeRng(seedNumber);
     const trace = [];
+    const instructionTrace = [];
     let reason = "max_steps";
     let steps = 0;
+
+    if (opts.instructionTraceLimit > 0) {
+      instructionTrace.push({
+        index: 0,
+        step: 0,
+        drawn: "initial",
+        line: null,
+        statement: "initial state",
+        changes: [],
+        state: cloneState(state),
+      });
+    }
 
     for (; steps < maxSteps; steps += 1) {
       if (program.runUntilExpr && Boolean(evalExpression(program.runUntilExpr, state, program.runUntilLine))) {
@@ -455,7 +493,17 @@
       }) || choices[choices.length - 1];
 
       const before = trace.length < opts.traceLimit ? cloneState(state) : null;
-      selected.label.statements.forEach((statement) => executeStatement(statement, state, rng));
+      const recorder = instructionTrace.length < opts.instructionTraceLimit
+        ? (entry) => {
+            if (instructionTrace.length >= opts.instructionTraceLimit) return;
+            instructionTrace.push(Object.assign({
+              index: instructionTrace.length,
+              step: steps + 1,
+              drawn: selected.label.name,
+            }, entry));
+          }
+        : null;
+      selected.label.statements.forEach((statement) => executeStatement(statement, state, rng, recorder));
 
       if (before) {
         trace.push({
@@ -484,6 +532,7 @@
       steps,
       reason,
       trace,
+      instructionTrace,
     };
   }
 
@@ -498,6 +547,7 @@
         maxSteps: opts.maxSteps,
         seedNumber: (baseSeed + Math.imul(index + 1, 0x9E3779B9)) >>> 0,
         traceLimit: index === 0 ? 80 : 0,
+        instructionTraceLimit: index === 0 ? 240 : 0,
       }));
     }
 

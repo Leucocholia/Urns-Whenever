@@ -5,9 +5,10 @@
 
   const examples = {
     "Coin flips": {
-      runs: 5000,
+      runs: 1,
       steps: 10,
       chart: "heads_out",
+      playback: "650",
       source: `heads:
   preset 1
   heads_out += 1
@@ -26,6 +27,7 @@ tails_out:
       runs: 1,
       steps: 20,
       chart: "a",
+      playback: "650",
       source: `n_left:
   preset 5
   n_left -= 1
@@ -43,6 +45,7 @@ run_until (n_left == 0)`,
       runs: 6000,
       steps: 12,
       chart: "heads_out",
+      playback: "650",
       source: `heads:
   preset 3
   heads_out += 1
@@ -59,6 +62,7 @@ output:
       runs: 6000,
       steps: 30,
       chart: "red_out",
+      playback: "650",
       source: `red:
   preset 1
   red += 1
@@ -77,6 +81,7 @@ output:
       runs: 8000,
       steps: 40,
       chart: "position_out",
+      playback: "650",
       source: `left:
   preset 1
   position_out -= 1
@@ -98,6 +103,7 @@ position_out:
     steps: document.getElementById("steps-input"),
     seed: document.getElementById("seed-input"),
     chartVariable: document.getElementById("chart-variable"),
+    playbackSpeed: document.getElementById("playback-speed"),
     messages: document.getElementById("messages"),
     parseStatus: document.getElementById("parse-status"),
     summaryTable: document.getElementById("summary-table"),
@@ -105,11 +111,16 @@ position_out:
     chartMeta: document.getElementById("chart-meta"),
     histogram: document.getElementById("histogram"),
     traceList: document.getElementById("trace-list"),
+    instructionSelect: document.getElementById("instruction-select"),
+    stateSnapshot: document.getElementById("state-snapshot"),
+    stateCaption: document.getElementById("state-caption"),
+    playbackMeta: document.getElementById("playback-meta"),
     pythonPreview: document.getElementById("python-preview"),
   };
 
   let lastProgram = null;
   let lastResults = null;
+  let playbackTimer = 0;
 
   function init() {
     Object.keys(examples).forEach((name) => {
@@ -126,6 +137,13 @@ position_out:
       runCurrentProgram();
     }, 240));
     nodes.chartVariable.addEventListener("change", renderCurrentHistogram);
+    nodes.instructionSelect.addEventListener("change", () => {
+      stopPlayback();
+      renderInstructionSnapshot(Number(nodes.instructionSelect.value || 0));
+    });
+    nodes.playbackSpeed.addEventListener("change", () => {
+      if (lastResults) startPlayback();
+    });
     nodes.runs.addEventListener("change", runCurrentProgram);
     nodes.steps.addEventListener("change", runCurrentProgram);
     nodes.seed.addEventListener("change", runCurrentProgram);
@@ -138,6 +156,7 @@ position_out:
     nodes.editor.value = example.source;
     nodes.runs.value = example.runs;
     nodes.steps.value = example.steps;
+    nodes.playbackSpeed.value = example.playback || "650";
     updateParsePreview(example.chart);
     runCurrentProgram(example.chart);
   }
@@ -177,6 +196,7 @@ position_out:
   }
 
   function runCurrentProgram(preferredChart) {
+    stopPlayback();
     const program = updateParsePreview(preferredChart);
     if (program.errors.length > 0) {
       lastResults = null;
@@ -197,8 +217,10 @@ position_out:
       });
       renderSummary(program, lastResults);
       renderTrace(lastResults.firstRun);
+      renderInstructionTimeline(lastResults.firstRun);
       renderCurrentHistogram();
       nodes.runMeta.textContent = `${runs.toLocaleString()} run${runs === 1 ? "" : "s"} x ${steps.toLocaleString()} step cap`;
+      startPlayback();
     } catch (error) {
       showRuntimeError(error);
       clearResults();
@@ -390,6 +412,74 @@ position_out:
     nodes.traceList.appendChild(final);
   }
 
+  function renderInstructionTimeline(firstRun) {
+    const snapshots = firstRun && firstRun.instructionTrace ? firstRun.instructionTrace : [];
+    nodes.instructionSelect.replaceChildren();
+
+    snapshots.forEach((entry, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = formatInstructionOption(entry);
+      nodes.instructionSelect.appendChild(option);
+    });
+
+    if (snapshots.length === 0) {
+      nodes.stateCaption.textContent = "No instruction snapshots";
+      nodes.stateSnapshot.textContent = "";
+      nodes.playbackMeta.textContent = "";
+      return;
+    }
+
+    nodes.playbackMeta.textContent = `${snapshots.length} snapshot${snapshots.length === 1 ? "" : "s"}`;
+    renderInstructionSnapshot(0);
+  }
+
+  function formatInstructionOption(entry) {
+    if (entry.index === 0) return "0. initial state";
+    const line = entry.line ? `line ${entry.line}` : "line ?";
+    return `${entry.index}. draw ${entry.step} ${entry.drawn} (${line})`;
+  }
+
+  function renderInstructionSnapshot(index) {
+    if (!lastResults || !lastResults.firstRun) return;
+    const snapshots = lastResults.firstRun.instructionTrace || [];
+    const entry = snapshots[Math.max(0, Math.min(index, snapshots.length - 1))];
+    if (!entry) return;
+
+    nodes.instructionSelect.value = String(entry.index);
+    nodes.stateCaption.textContent = entry.index === 0
+      ? "Initial state before any draw."
+      : `Draw ${entry.step}: ${entry.drawn}, line ${entry.line}, ${entry.statement}`;
+    nodes.stateSnapshot.textContent = JSON.stringify(entry.state, null, 2);
+  }
+
+  function startPlayback() {
+    stopPlayback();
+    const firstRun = lastResults && lastResults.firstRun;
+    const snapshots = firstRun && firstRun.instructionTrace ? firstRun.instructionTrace : [];
+    if (snapshots.length === 0) return;
+
+    const delay = Math.max(0, Number(nodes.playbackSpeed.value) || 0);
+    if (delay === 0 || snapshots.length === 1) {
+      renderInstructionSnapshot(snapshots.length - 1);
+      return;
+    }
+
+    let index = 0;
+    renderInstructionSnapshot(index);
+    playbackTimer = window.setInterval(() => {
+      index += 1;
+      renderInstructionSnapshot(index);
+      if (index >= snapshots.length - 1) stopPlayback();
+    }, delay);
+  }
+
+  function stopPlayback() {
+    if (!playbackTimer) return;
+    window.clearInterval(playbackTimer);
+    playbackTimer = 0;
+  }
+
   function renderPython(program) {
     if (program.errors.length > 0) {
       nodes.pythonPreview.textContent = "# Fix parse errors to generate Python.";
@@ -402,6 +492,10 @@ position_out:
     nodes.summaryTable.innerHTML = "";
     nodes.runMeta.textContent = "";
     nodes.traceList.replaceChildren();
+    nodes.instructionSelect.replaceChildren();
+    nodes.stateCaption.textContent = "";
+    nodes.stateSnapshot.textContent = "";
+    nodes.playbackMeta.textContent = "";
     drawEmptyChart("No results");
   }
 
