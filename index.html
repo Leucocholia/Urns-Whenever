@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Whichever Lab</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Whichever v0.1</p>
+          <h1>Urn programs, many outcomes</h1>
+        </div>
+        <div class="topbar-actions">
+          <label class="select-label">
+            Example
+            <select id="example-select" aria-label="Example program"></select>
+          </label>
+          <button id="run-button" class="primary-button" type="button" title="Run simulation">
+            <span aria-hidden="true">▶</span>
+            Run
+          </button>
+        </div>
+      </header>
+
+      <section class="workspace" aria-label="Whichever workspace">
+        <section class="editor-pane" aria-label="Program editor">
+          <div class="pane-heading">
+            <h2>Program</h2>
+            <span id="parse-status" class="status-pill">Ready</span>
+          </div>
+          <textarea id="source-editor" spellcheck="false" aria-label="Whichever source code"></textarea>
+          <div class="semantics-strip">
+            <span>Drawable: labels with executable statements and positive value.</span>
+            <span>No implicit decrement.</span>
+            <span>Outputs: <code>_out</code> labels or <code>output:</code> slots.</span>
+          </div>
+        </section>
+
+        <section class="results-pane" aria-label="Simulation results">
+          <div class="controls-grid">
+            <label>
+              Runs
+              <input id="runs-input" type="number" min="1" max="50000" step="1" value="5000">
+            </label>
+            <label>
+              Steps per run
+              <input id="steps-input" type="number" min="0" max="100000" step="1" value="10">
+            </label>
+            <label>
+              Seed
+              <input id="seed-input" type="text" value="whichever">
+            </label>
+            <label>
+              Chart value
+              <select id="chart-variable" aria-label="Chart variable"></select>
+            </label>
+          </div>
+
+          <div id="messages" class="messages" aria-live="polite"></div>
+
+          <div class="results-grid">
+            <section class="panel summary-panel" aria-label="Summary">
+              <div class="pane-heading">
+                <h2>Summary</h2>
+                <span id="run-meta" class="subtle"></span>
+              </div>
+              <div id="summary-table" class="table-wrap"></div>
+            </section>
+
+            <section class="panel chart-panel" aria-label="Distribution chart">
+              <div class="pane-heading">
+                <h2>Distribution</h2>
+                <span id="chart-meta" class="subtle"></span>
+              </div>
+              <canvas id="histogram" width="900" height="360" role="img" aria-label="Histogram of selected final value"></canvas>
+            </section>
+
+            <section class="panel trace-panel" aria-label="First run trace">
+              <div class="pane-heading">
+                <h2>First Run</h2>
+                <span class="subtle">trace</span>
+              </div>
+              <ol id="trace-list" class="trace-list"></ol>
+            </section>
+
+            <section class="panel python-panel" aria-label="Python preview">
+              <div class="pane-heading">
+                <h2>Python Preview</h2>
+                <span class="subtle">generated</span>
+              </div>
+              <pre id="python-preview"></pre>
+            </section>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="src/whichever.js"></script>
+    <script src="src/app.js"></script>
+  </body>
+</html>
