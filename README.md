@@ -24,7 +24,7 @@ Rules:
 - Labels ending in `_out`, and slots declared under `output:`, are treated as output values.
 - `run_until (expr)` stops before the next draw when the condition is true.
 - If there is no `run_until`, the UI's step cap controls run length.
-- The app records an initial state snapshot plus one exact state snapshot after every executed instruction in the first run.
+- The app records an initial state snapshot plus one exact state snapshot after every executed instruction in the first run, rendered as urn columns with stacked balls.
 
 Supported statements:
 
@@ -45,7 +45,7 @@ Expressions support numbers, state names, `+ - * / %`, comparisons, `&& || !`, p
 
 ## Simulation UI
 
-The default coin-flip example runs once and plays the first run at human speed. Increase `Runs` to collect a distribution, or switch `Playback` to `Instant` to jump directly to the final state snapshot.
+The default coin-flip example runs once and plays the first run at human speed. Increase `Runs` to collect a distribution, or switch `Playback` to `Instant` to jump directly to the final state snapshot. The State panel renders each value as a vertical stack of balls, with compact overflow markers for large counts.
 
 ## Examples
 

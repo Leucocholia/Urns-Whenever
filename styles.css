@@ -388,18 +388,114 @@ th {
   line-height: 1.35;
 }
 
-#state-snapshot {
-  min-height: 160px;
-  max-height: 260px;
+.urn-state {
+  min-height: 210px;
+  max-height: 330px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 12px;
   overflow: auto;
   margin: 12px 14px 14px;
   border-radius: 6px;
   padding: 14px;
-  background: #111827;
-  color: #e5edf8;
-  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
-  font-size: 0.85rem;
-  line-height: 1.5;
+  background: #f8fafc;
+  border: 1px solid var(--soft-line);
+}
+
+.urn-column {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 1fr auto auto;
+  gap: 7px;
+  justify-items: center;
+  align-items: end;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: var(--paper);
+  padding: 10px 8px;
+}
+
+.urn-column.output {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+}
+
+.urn-column.negative {
+  border-color: #fecdd3;
+  background: #fff7f8;
+}
+
+.urn-stack {
+  width: 100%;
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 3px;
+}
+
+.urn-ball {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--teal);
+  border: 1px solid var(--teal-dark);
+  box-shadow: inset -3px -3px 0 rgba(0, 0, 0, 0.08), inset 3px 3px 0 rgba(255, 255, 255, 0.24);
+}
+
+.urn-column.output .urn-ball {
+  background: var(--blue);
+  border-color: #1d4ed8;
+}
+
+.urn-column.negative .urn-ball {
+  background: var(--rose);
+  border-color: #9f1239;
+}
+
+.urn-overflow,
+.urn-empty,
+.urn-fractional {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0 8px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--soft-line);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.urn-empty {
+  width: 28px;
+  min-height: 28px;
+  border-radius: 50%;
+  padding: 0;
+}
+
+.urn-fractional {
+  color: var(--amber);
+}
+
+.urn-label {
+  max-width: 100%;
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.urn-count {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
 }
 
 #python-preview {

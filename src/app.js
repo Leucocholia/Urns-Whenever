@@ -425,7 +425,7 @@ position_out:
 
     if (snapshots.length === 0) {
       nodes.stateCaption.textContent = "No instruction snapshots";
-      nodes.stateSnapshot.textContent = "";
+      nodes.stateSnapshot.replaceChildren();
       nodes.playbackMeta.textContent = "";
       return;
     }
@@ -450,7 +450,68 @@ position_out:
     nodes.stateCaption.textContent = entry.index === 0
       ? "Initial state before any draw."
       : `Draw ${entry.step}: ${entry.drawn}, line ${entry.line}, ${entry.statement}`;
-    nodes.stateSnapshot.textContent = JSON.stringify(entry.state, null, 2);
+    renderStateUrns(entry.state);
+  }
+
+  function renderStateUrns(state) {
+    nodes.stateSnapshot.replaceChildren();
+    getStateNames(state).forEach((name) => {
+      nodes.stateSnapshot.appendChild(createUrnNode(name, Number(state[name] || 0)));
+    });
+  }
+
+  function getStateNames(state) {
+    const programNames = lastProgram ? lastProgram.slots.map((slot) => slot.name) : [];
+    return unique(programNames.concat(Object.keys(state))).filter((name) => Object.prototype.hasOwnProperty.call(state, name));
+  }
+
+  function createUrnNode(name, value) {
+    const node = document.createElement("section");
+    node.className = `urn-column${name.endsWith("_out") ? " output" : ""}${value < 0 ? " negative" : ""}`;
+    node.setAttribute("aria-label", `${name} equals ${formatNumber(value)}`);
+
+    const stack = document.createElement("div");
+    stack.className = "urn-stack";
+
+    const magnitude = Number.isInteger(value) ? Math.abs(value) : Math.floor(Math.abs(value));
+    const visibleCount = Math.min(magnitude, 24);
+    const overflow = magnitude - visibleCount;
+    if (overflow > 0) {
+      const overflowNode = document.createElement("span");
+      overflowNode.className = "urn-overflow";
+      overflowNode.textContent = `+${formatNumber(overflow)}`;
+      stack.appendChild(overflowNode);
+    }
+    for (let index = 0; index < visibleCount; index += 1) {
+      const circle = document.createElement("span");
+      circle.className = "urn-ball";
+      stack.appendChild(circle);
+    }
+    if (visibleCount === 0) {
+      const empty = document.createElement("span");
+      empty.className = "urn-empty";
+      empty.textContent = "0";
+      stack.appendChild(empty);
+    }
+    if (!Number.isInteger(value)) {
+      const fractional = document.createElement("span");
+      fractional.className = "urn-fractional";
+      fractional.textContent = formatNumber(value);
+      stack.appendChild(fractional);
+    }
+
+    const label = document.createElement("div");
+    label.className = "urn-label";
+    label.textContent = name;
+
+    const count = document.createElement("div");
+    count.className = "urn-count";
+    count.textContent = formatNumber(value);
+
+    node.appendChild(stack);
+    node.appendChild(label);
+    node.appendChild(count);
+    return node;
   }
 
   function startPlayback() {
@@ -494,7 +555,7 @@ position_out:
     nodes.traceList.replaceChildren();
     nodes.instructionSelect.replaceChildren();
     nodes.stateCaption.textContent = "";
-    nodes.stateSnapshot.textContent = "";
+    nodes.stateSnapshot.replaceChildren();
     nodes.playbackMeta.textContent = "";
     drawEmptyChart("No results");
   }
