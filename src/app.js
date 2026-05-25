@@ -385,15 +385,14 @@ run_for 40`,
     const inset = { left: 42, right: 18, top: 20, bottom: 36 };
     const plotWidth = width - inset.left - inset.right;
     const plotHeight = height - inset.top - inset.bottom;
-    const outputNames = simulation.program.outputNames;
-    const visibleRuns = simulation.completed.slice(-180);
-    const stacks = visibleRuns.map((run) => outputNames.map((name) => Number(run.outputs[name] || 0)));
-    const posMax = Math.max(1, ...stacks.map((values) => values.filter((value) => value > 0).reduce((sum, value) => sum + value, 0)));
-    const negMin = Math.min(0, ...stacks.map((values) => values.filter((value) => value < 0).reduce((sum, value) => sum + value, 0)));
-    const totalRange = Math.max(1, posMax - negMin);
-    const baseline = inset.top + (posMax / totalRange) * plotHeight;
-    const barGap = stacks.length > 80 ? 1 : 3;
-    const barWidth = Math.max(2, (plotWidth - barGap * Math.max(0, stacks.length - 1)) / stacks.length);
+    const histogram = outputHistogram(simulation.completed, simulation.program.outputNames);
+    const maxBuckets = 90;
+    const visibleBuckets = histogram.length > maxBuckets
+      ? histogram.slice().sort((a, b) => b.count - a.count).slice(0, maxBuckets).sort(compareBucketValues)
+      : histogram;
+    const maxCount = Math.max(1, ...visibleBuckets.map((bucket) => bucket.count));
+    const barGap = visibleBuckets.length > 45 ? 2 : 5;
+    const barWidth = Math.max(3, (plotWidth - barGap * Math.max(0, visibleBuckets.length - 1)) / visibleBuckets.length);
 
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = "#ffffff";
@@ -405,38 +404,73 @@ run_for 40`,
     ctx.lineTo(inset.left, inset.top + plotHeight);
     ctx.lineTo(inset.left + plotWidth, inset.top + plotHeight);
     ctx.stroke();
-    ctx.strokeStyle = "#94a3b8";
-    ctx.beginPath();
-    ctx.moveTo(inset.left, baseline);
-    ctx.lineTo(inset.left + plotWidth, baseline);
-    ctx.stroke();
 
-    stacks.forEach((values, runIndex) => {
-      const x = inset.left + runIndex * (barWidth + barGap);
-      let positiveY = baseline;
-      let negativeY = baseline;
-      values.forEach((value, outputIndex) => {
-        const heightForValue = Math.abs(value) / totalRange * plotHeight;
-        ctx.fillStyle = outputColor(outputIndex);
-        if (value >= 0) {
-          positiveY -= heightForValue;
-          ctx.fillRect(x, positiveY, barWidth, heightForValue);
-        } else {
-          ctx.fillRect(x, negativeY, barWidth, heightForValue);
-          negativeY += heightForValue;
-        }
+    visibleBuckets.forEach((bucket, bucketIndex) => {
+      const x = inset.left + bucketIndex * (barWidth + barGap);
+      const barHeight = bucket.count / maxCount * plotHeight;
+      let y = inset.top + plotHeight;
+      bucketComposition(bucket.values).forEach((segment) => {
+        const segmentHeight = barHeight * segment.share;
+        y -= segmentHeight;
+        ctx.fillStyle = outputColor(segment.index);
+        ctx.fillRect(x, y, barWidth, segmentHeight);
       });
     });
 
     ctx.fillStyle = "#687386";
     ctx.font = "13px system-ui, sans-serif";
     ctx.textAlign = "right";
-    ctx.fillText(formatNumber(posMax), inset.left - 8, inset.top + 5);
-    if (negMin < 0) ctx.fillText(formatNumber(negMin), inset.left - 8, inset.top + plotHeight);
+    ctx.fillText(String(maxCount), inset.left - 8, inset.top + 5);
+    ctx.fillText("0", inset.left - 8, inset.top + plotHeight + 4);
     ctx.textAlign = "center";
-    ctx.fillText(String(simulation.completed.length), inset.left + plotWidth, inset.top + plotHeight + 24);
+    ctx.font = "12px system-ui, sans-serif";
+    const labelEvery = Math.max(1, Math.ceil(visibleBuckets.length / 10));
+    visibleBuckets.forEach((bucket, index) => {
+      if (index % labelEvery !== 0 && index !== visibleBuckets.length - 1) return;
+      const x = inset.left + index * (barWidth + barGap) + barWidth / 2;
+      ctx.fillText(bucket.label, x, inset.top + plotHeight + 22);
+    });
 
-    nodes.outputMeta.textContent = `${simulation.completed.length.toLocaleString()} of ${simulation.totalRuns.toLocaleString()} complete`;
+    const hidden = histogram.length - visibleBuckets.length;
+    nodes.outputMeta.textContent = `${visibleBuckets.length.toLocaleString()} bin${visibleBuckets.length === 1 ? "" : "s"} from ${simulation.completed.length.toLocaleString()} of ${simulation.totalRuns.toLocaleString()} run${simulation.totalRuns === 1 ? "" : "s"}${hidden > 0 ? `, top ${visibleBuckets.length} shown` : ""}`;
+  }
+
+  function outputHistogram(runs, outputNames) {
+    const buckets = new Map();
+    runs.forEach((run) => {
+      const values = outputNames.map((name) => Number(run.outputs[name] || 0));
+      const key = values.map(formatNumber).join(",");
+      if (!buckets.has(key)) {
+        buckets.set(key, {
+          values,
+          label: values.map(formatNumber).join(","),
+          count: 0,
+        });
+      }
+      buckets.get(key).count += 1;
+    });
+    return Array.from(buckets.values()).sort(compareBucketValues);
+  }
+
+  function compareBucketValues(a, b) {
+    const length = Math.max(a.values.length, b.values.length);
+    for (let index = 0; index < length; index += 1) {
+      const left = a.values[index] || 0;
+      const right = b.values[index] || 0;
+      if (left !== right) return left - right;
+    }
+    return 0;
+  }
+
+  function bucketComposition(values) {
+    const weights = values.map((value) => Math.abs(Number(value) || 0));
+    const total = weights.reduce((sum, value) => sum + value, 0);
+    if (total <= 0) {
+      return values.map((_, index) => ({ index, share: 1 / Math.max(1, values.length) }));
+    }
+    return weights
+      .map((weight, index) => ({ index, share: weight / total }))
+      .filter((segment) => segment.share > 0);
   }
 
   function drawEmptyOutputChart(text) {

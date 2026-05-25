@@ -60,7 +60,7 @@ The output interface is a small playback surface:
 
 - Play and pause buttons with an FPS slider.
 - An unlabeled circle-stack view of the current run's output variables, ordered exactly as listed in `outputs:`.
-- A stacked bar chart that updates after every completed run, with one bar per run and one stacked segment per output variable.
+- A histogram that updates after every completed run, with bins keyed by the output tuple in `outputs:` order.
 
 ## Examples
 
