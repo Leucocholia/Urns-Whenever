@@ -7,8 +7,10 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
-  const VERSION = "0.1.0";
+  const VERSION = "0.2.0";
   const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  const SEED_STEP = 0x9E3779B9;
+  const RESERVED_SECTIONS = new Set(["presets", "outputs"]);
   const ALLOWED_FUNCTIONS = Object.freeze({
     abs: Math.abs,
     min: Math.min,
@@ -46,8 +48,7 @@
         name,
         presetExpr: null,
         presetLine: null,
-        output: name.endsWith("_out"),
-        referenced: false,
+        output: false,
       });
     }
     return slots.get(name);
@@ -80,9 +81,8 @@
   }
 
   function parseStatement(text, line) {
-    const preset = text.match(/^preset\s+(.+)$/);
-    if (preset) {
-      return { type: "preset", expr: preset[1].trim(), line, source: text };
+    if (/^preset\b/.test(text)) {
+      throw new WhicheverError("Preset values must be declared in the top-level presets: section.", line);
     }
 
     const tuple = text.match(/^\(([^)]+)\)\s*=\s*\((.*)\)$/);
@@ -122,15 +122,44 @@
     const weighted = text.match(/^(.*\S)\s+weight\s+(.+)$/);
     const statementText = weighted ? weighted[1].trim() : text.trim();
     const weightExpr = weighted ? weighted[2].trim() : "1";
-    const statement = parseStatement(statementText, line);
-    if (statement.type === "preset") {
-      throw new WhicheverError("A choose option cannot use preset.", line);
-    }
-    return { statement, weightExpr, line };
+    return { statement: parseStatement(statementText, line), weightExpr, line };
   }
 
-  function parseBody(section, slots, warnings) {
-    const slot = ensureSlot(slots, section.name);
+  function parsePresets(section, slots) {
+    section.body.forEach((item) => {
+      const match = item.text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+)$/);
+      if (!match) {
+        throw new WhicheverError("Preset lines must look like `name: expr`.", item.line);
+      }
+      const slot = ensureSlot(slots, match[1]);
+      if (slot.presetExpr != null) {
+        throw new WhicheverError(`Duplicate preset for "${match[1]}".`, item.line);
+      }
+      slot.presetExpr = match[2].trim();
+      slot.presetLine = item.line;
+    });
+  }
+
+  function parseOutputs(section, slots, outputNames, warnings) {
+    section.body.forEach((item) => {
+      const clean = item.text.replace(/^-\s*/, "");
+      splitTopLevel(clean, ",").forEach((rawName) => {
+        const name = rawName.trim();
+        if (!IDENTIFIER.test(name)) {
+          throw new WhicheverError(`Invalid output name "${name}".`, item.line);
+        }
+        const slot = ensureSlot(slots, name);
+        if (slot.output) {
+          warnings.push({ line: item.line, message: `"${name}" appears more than once in outputs:.` });
+          return;
+        }
+        slot.output = true;
+        outputNames.push(name);
+      });
+    });
+  }
+
+  function parseBody(section, slots) {
     const statements = [];
     const body = section.body;
 
@@ -151,23 +180,11 @@
         continue;
       }
 
-      const statement = parseStatement(item.text, item.line);
-      if (statement.type === "preset") {
-        slot.presetExpr = statement.expr;
-        slot.presetLine = statement.line;
-      } else {
-        statements.push(statement);
-      }
+      statements.push(parseStatement(item.text, item.line));
     }
 
-    if (slot.output && statements.length > 0) {
-      warnings.push({
-        line: section.line,
-        message: `${section.name} is marked as output, so its statements will not be drawable.`,
-      });
-    }
-
-    statements.flatMap(parseAssignmentTargets).forEach((name) => ensureSlot(slots, name).referenced = true);
+    ensureSlot(slots, section.name);
+    statements.flatMap(parseAssignmentTargets).forEach((name) => ensureSlot(slots, name));
 
     return {
       name: section.name,
@@ -176,19 +193,11 @@
     };
   }
 
-  function parseOutputBody(section, slots) {
-    section.body.forEach((item) => {
-      let match = item.text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+preset\s+(.+)$/);
-      if (!match) match = item.text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*preset\s+(.+)$/);
-      if (!match) match = item.text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
-      if (!match) {
-        throw new WhicheverError("Output lines must look like `name preset expr` or `name = expr`.", item.line);
-      }
-      const slot = ensureSlot(slots, match[1]);
-      slot.output = true;
-      slot.presetExpr = match[2].trim();
-      slot.presetLine = item.line;
-    });
+  function parseRunFor(text) {
+    const paren = text.match(/^run_for\s*\((.*)\)\s*$/);
+    if (paren) return paren[1].trim();
+    const bare = text.match(/^run_for\s+(.+)$/);
+    return bare ? bare[1].trim() : null;
   }
 
   function parseProgram(source) {
@@ -196,6 +205,9 @@
     const warnings = [];
     const sections = [];
     let current = null;
+    let runMode = null;
+    let runForExpr = null;
+    let runForLine = null;
     let runUntilExpr = null;
     let runUntilLine = null;
     const lines = String(source || "").replace(/\r\n/g, "\n").split("\n");
@@ -208,17 +220,27 @@
       const text = clean.trim();
 
       if (indent === 0) {
-        const run = text.match(/^run_until\s*\((.*)\)\s*$/);
-        if (run) {
-          runUntilExpr = run[1].trim();
-          runUntilLine = line;
+        const runUntil = text.match(/^run_until\s*\((.*)\)\s*$/);
+        const runFor = parseRunFor(text);
+        if (runUntil || runFor != null) {
+          if (runMode) {
+            errors.push({ line, message: "A program may have only one run_for or run_until clause." });
+          } else if (runUntil) {
+            runMode = "until";
+            runUntilExpr = runUntil[1].trim();
+            runUntilLine = line;
+          } else {
+            runMode = "for";
+            runForExpr = runFor;
+            runForLine = line;
+          }
           current = null;
           return;
         }
 
         const label = text.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*$/);
         if (!label) {
-          errors.push({ line, message: `Expected a label or run_until clause, got "${text}".` });
+          errors.push({ line, message: `Expected a section label or run clause, got "${text}".` });
           current = null;
           return;
         }
@@ -229,24 +251,34 @@
       }
 
       if (!current) {
-        errors.push({ line, message: "Indented statement is not inside a label." });
+        errors.push({ line, message: "Indented statement is not inside a section." });
         return;
       }
       current.body.push({ indent, text, line });
     });
 
     const slots = new Map();
+    const outputNames = [];
     const labels = [];
+    let hasPresets = false;
+    let hasOutputs = false;
 
     try {
       sections.forEach((section) => {
-        if (section.name === "output") {
-          parseOutputBody(section, slots);
+        if (section.name === "presets") {
+          hasPresets = true;
+          parsePresets(section, slots);
           return;
         }
-        const slot = ensureSlot(slots, section.name);
-        if (section.name.endsWith("_out")) slot.output = true;
-        labels.push(parseBody(section, slots, warnings));
+        if (section.name === "outputs") {
+          hasOutputs = true;
+          parseOutputs(section, slots, outputNames, warnings);
+          return;
+        }
+        if (RESERVED_SECTIONS.has(section.name)) {
+          throw new WhicheverError(`"${section.name}" is reserved.`, section.line);
+        }
+        labels.push(parseBody(section, slots));
       });
     } catch (error) {
       if (error instanceof WhicheverError) {
@@ -256,10 +288,18 @@
       }
     }
 
-    const drawableLabels = labels.filter((label) => {
-      const slot = ensureSlot(slots, label.name);
-      return !slot.output && label.statements.length > 0;
+    if (!hasPresets) errors.push({ line: null, message: "Missing required presets: section." });
+    if (!hasOutputs) errors.push({ line: null, message: "Missing required outputs: section." });
+    if (outputNames.length === 0) errors.push({ line: null, message: "outputs: must list at least one variable." });
+    if (!runMode) errors.push({ line: null, message: "Missing required run_for or run_until clause." });
+
+    Array.from(slots.values()).forEach((slot) => {
+      if (slot.presetExpr == null) {
+        errors.push({ line: null, message: `"${slot.name}" must have a preset value in presets:.` });
+      }
     });
+
+    const drawableLabels = labels.filter((label) => label.statements.length > 0);
 
     return {
       version: VERSION,
@@ -268,6 +308,10 @@
       drawableLabels,
       slots: Array.from(slots.values()),
       slotMap: slots,
+      outputNames,
+      runMode,
+      runForExpr,
+      runForLine,
       runUntilExpr,
       runUntilLine,
       errors,
@@ -339,6 +383,10 @@
     return hash >>> 0;
   }
 
+  function seedForRun(seed, index) {
+    return (hashSeed(seed) + Math.imul(index + 1, SEED_STEP)) >>> 0;
+  }
+
   function makeRng(seedNumber) {
     let value = seedNumber >>> 0;
     return function rng() {
@@ -356,9 +404,7 @@
       state[slot.name] = 0;
     });
     program.slots.forEach((slot) => {
-      if (slot.presetExpr != null) {
-        state[slot.name] = numeric(evalExpression(slot.presetExpr, state, slot.presetLine), "preset", slot.presetLine);
-      }
+      state[slot.name] = numeric(evalExpression(slot.presetExpr, state, slot.presetLine), "preset", slot.presetLine);
     });
     return state;
   }
@@ -447,18 +493,35 @@
       .filter((entry) => Number.isFinite(entry.weight) && entry.weight > 0);
   }
 
+  function outputValues(program, state) {
+    const outputs = {};
+    program.outputNames.forEach((name) => {
+      outputs[name] = state[name] || 0;
+    });
+    return outputs;
+  }
+
+  function runLimit(program, state, fallbackSafety) {
+    if (program.runMode === "for") {
+      const value = Math.floor(numeric(evalExpression(program.runForExpr, state, program.runForLine), "run_for", program.runForLine));
+      if (value < 0) throw new WhicheverError("run_for must be non-negative.", program.runForLine);
+      return value;
+    }
+    return fallbackSafety;
+  }
+
   function runOne(program, options) {
     if (program.errors.length > 0) {
       throw new WhicheverError(program.errors.map((error) => error.message).join("\n"));
     }
-    const opts = Object.assign({ maxSteps: 100, seed: "whichever", traceLimit: 80, instructionTraceLimit: 240 }, options || {});
-    const maxSteps = Math.max(0, Math.floor(Number(opts.maxSteps) || 0));
+    const opts = Object.assign({ seed: "whichever", traceLimit: 80, instructionTraceLimit: 240, safetySteps: 10000 }, options || {});
     const state = initialState(program);
+    const maxSteps = runLimit(program, state, Math.max(1, Math.floor(Number(opts.safetySteps) || 10000)));
     const seedNumber = typeof opts.seedNumber === "number" ? opts.seedNumber >>> 0 : hashSeed(opts.seed);
     const rng = opts.rng || makeRng(seedNumber);
     const trace = [];
     const instructionTrace = [];
-    let reason = "max_steps";
+    let reason = null;
     let steps = 0;
 
     if (opts.instructionTraceLimit > 0) {
@@ -474,7 +537,7 @@
     }
 
     for (; steps < maxSteps; steps += 1) {
-      if (program.runUntilExpr && Boolean(evalExpression(program.runUntilExpr, state, program.runUntilLine))) {
+      if (program.runMode === "until" && Boolean(evalExpression(program.runUntilExpr, state, program.runUntilLine))) {
         reason = "run_until";
         break;
       }
@@ -513,22 +576,19 @@
         });
       }
 
-      if (program.runUntilExpr && Boolean(evalExpression(program.runUntilExpr, state, program.runUntilLine))) {
+      if (program.runMode === "until" && Boolean(evalExpression(program.runUntilExpr, state, program.runUntilLine))) {
         steps += 1;
         reason = "run_until";
         break;
       }
     }
 
-    const outputNames = program.slots.filter((slot) => slot.output).map((slot) => slot.name);
-    const outputs = {};
-    outputNames.forEach((name) => {
-      outputs[name] = state[name] || 0;
-    });
+    if (!reason) reason = program.runMode === "for" ? "run_for" : "safety_limit";
 
     return {
       state: cloneState(state),
-      outputs,
+      outputs: outputValues(program, state),
+      outputValues: program.outputNames.map((name) => state[name] || 0),
       steps,
       reason,
       trace,
@@ -537,39 +597,34 @@
   }
 
   function runMany(program, options) {
-    const opts = Object.assign({ runs: 1000, maxSteps: 100, seed: "whichever" }, options || {});
+    const opts = Object.assign({ runs: 1000, seed: "whichever" }, options || {});
     const runs = Math.max(1, Math.floor(Number(opts.runs) || 1));
-    const baseSeed = hashSeed(opts.seed);
     const results = [];
-
     for (let index = 0; index < runs; index += 1) {
       results.push(runOne(program, {
-        maxSteps: opts.maxSteps,
-        seedNumber: (baseSeed + Math.imul(index + 1, 0x9E3779B9)) >>> 0,
+        seedNumber: seedForRun(opts.seed, index),
         traceLimit: index === 0 ? 80 : 0,
         instructionTraceLimit: index === 0 ? 240 : 0,
+        safetySteps: opts.safetySteps,
       }));
     }
-
     return {
       results,
       firstRun: results[0],
-      stats: summarize(results),
+      stats: summarize(results, program.outputNames),
     };
   }
 
-  function summarize(results) {
-    const names = Array.from(new Set(results.flatMap((result) => Object.keys(result.state)))).sort();
+  function summarize(results, names) {
+    const summaryNames = names && names.length ? names : Array.from(new Set(results.flatMap((result) => Object.keys(result.state)))).sort();
     const stats = {};
-    names.forEach((name) => {
+    summaryNames.forEach((name) => {
       const values = results.map((result) => Number(result.state[name] || 0));
       const sum = values.reduce((acc, value) => acc + value, 0);
-      const min = Math.min.apply(null, values);
-      const max = Math.max.apply(null, values);
       stats[name] = {
         mean: sum / values.length,
-        min,
-        max,
+        min: Math.min.apply(null, values),
+        max: Math.max.apply(null, values),
         final: values[0],
       };
     });
@@ -639,7 +694,7 @@
       "import math",
       "import random",
       "",
-      "def run(seed=None, max_steps=100):",
+      "def run(seed=None, safety_steps=10000):",
       "    rng = random.Random(seed)",
       "    state = {}",
       "    def E(expr):",
@@ -649,17 +704,14 @@
     ];
 
     program.slots.forEach((slot) => {
-      lines.push(`    state[${pyString(slot.name)}] = 0`);
+      lines.push(`    state[${pyString(slot.name)}] = E(${pyString(pythonExpr(slot.presetExpr))})`);
     });
-    program.slots.forEach((slot) => {
-      if (slot.presetExpr != null) {
-        lines.push(`    state[${pyString(slot.name)}] = E(${pyString(pythonExpr(slot.presetExpr))})`);
-      }
-    });
-
-    lines.push("    reason = 'max_steps'");
-    lines.push("    for step in range(max_steps):");
-    if (program.runUntilExpr) {
+    lines.push(program.runMode === "for"
+      ? `    step_limit = int(E(${pyString(pythonExpr(program.runForExpr))}))`
+      : "    step_limit = safety_steps");
+    lines.push("    reason = None");
+    lines.push("    for step in range(step_limit):");
+    if (program.runMode === "until") {
       lines.push(`        if E(${pyString(pythonExpr(program.runUntilExpr))}):`);
       lines.push("            reason = 'run_until'");
       lines.push("            break");
@@ -679,21 +731,17 @@
     lines.push("            if pick <= 0:");
     lines.push("                drawn = name");
     lines.push("                break");
-
     program.drawableLabels.forEach((label, index) => {
       lines.push(`        ${index > 0 ? "el" : ""}if drawn == ${pyString(label.name)}:`);
       label.statements.forEach((statement) => compileStatementToPython(statement, lines, 12));
     });
-
-    if (program.runUntilExpr) {
+    if (program.runMode === "until") {
       lines.push(`        if E(${pyString(pythonExpr(program.runUntilExpr))}):`);
       lines.push("            reason = 'run_until'");
       lines.push("            break");
     }
-    lines.push("    return state, reason");
-    lines.push("");
-    lines.push("# Example: state, reason = run(seed=1, max_steps=10)");
-
+    lines.push(`    outputs = {name: state.get(name, 0) for name in ${JSON.stringify(program.outputNames)}}`);
+    lines.push(`    return state, outputs, reason or ${pyString(program.runMode === "for" ? "run_for" : "safety_limit")}`);
     return lines.join("\n");
   }
 
@@ -706,5 +754,6 @@
     histogram,
     compileToPython,
     hashSeed,
+    seedForRun,
   };
 });

@@ -2,124 +2,129 @@
   "use strict";
 
   const W = window.Whichever;
+  const OUTPUT_COLORS = ["#0f766e", "#2563eb", "#b45309", "#be123c", "#64748b", "#7c3aed"];
 
   const examples = {
     "Coin flips": {
-      runs: 1,
-      steps: 10,
-      chart: "heads_out",
-      playback: "650",
-      source: `heads:
-  preset 1
+      runs: 20,
+      fps: 2,
+      source: `presets:
+  heads: 1
+  tails: 1
+  heads_out: 0
+  tails_out: 0
+
+outputs:
+  heads_out
+  tails_out
+
+heads:
   heads_out += 1
 
 tails:
-  preset 1
   tails_out += 1
 
-heads_out:
-  preset 0
-
-tails_out:
-  preset 0`,
+run_for 10`,
     },
     "Fibonacci 5": {
       runs: 1,
-      steps: 20,
-      chart: "a",
-      playback: "650",
-      source: `n_left:
-  preset 5
+      fps: 2,
+      source: `presets:
+  n_left: 5
+  a: 0
+  b: 1
+
+outputs:
+  a
+  b
+
+n_left:
   n_left -= 1
   (a, b) = (b, a + b)
-
-a:
-  preset 0
-
-b:
-  preset 1
 
 run_until (n_left == 0)`,
     },
     "Biased coin": {
-      runs: 6000,
-      steps: 12,
-      chart: "heads_out",
-      playback: "650",
-      source: `heads:
-  preset 3
+      runs: 40,
+      fps: 6,
+      source: `presets:
+  heads: 3
+  tails: 1
+  heads_out: 0
+  tails_out: 0
+
+outputs:
+  heads_out
+  tails_out
+
+heads:
   heads_out += 1
 
 tails:
-  preset 1
   tails_out += 1
 
-output:
-  heads_out preset 0
-  tails_out preset 0`,
+run_for 12`,
     },
     "Polya urn": {
-      runs: 6000,
-      steps: 30,
-      chart: "red_out",
-      playback: "650",
-      source: `red:
-  preset 1
+      runs: 30,
+      fps: 8,
+      source: `presets:
+  red: 1
+  blue: 1
+
+outputs:
+  red
+  blue
+
+red:
   red += 1
-  red_out += 1
 
 blue:
-  preset 1
   blue += 1
-  blue_out += 1
 
-output:
-  red_out preset 0
-  blue_out preset 0`,
+run_for 30`,
     },
     "Random walk": {
-      runs: 8000,
-      steps: 40,
-      chart: "position_out",
-      playback: "650",
-      source: `left:
-  preset 1
-  position_out -= 1
+      runs: 60,
+      fps: 10,
+      source: `presets:
+  left: 1
+  right: 1
+  position: 0
+
+outputs:
+  position
+
+left:
+  position -= 1
 
 right:
-  preset 1
-  position_out += 1
+  position += 1
 
-position_out:
-  preset 0`,
+run_for 40`,
     },
   };
 
   const nodes = {
     exampleSelect: document.getElementById("example-select"),
-    runButton: document.getElementById("run-button"),
+    playButton: document.getElementById("play-button"),
+    pauseButton: document.getElementById("pause-button"),
     editor: document.getElementById("source-editor"),
     runs: document.getElementById("runs-input"),
-    steps: document.getElementById("steps-input"),
     seed: document.getElementById("seed-input"),
-    chartVariable: document.getElementById("chart-variable"),
-    playbackSpeed: document.getElementById("playback-speed"),
+    fps: document.getElementById("fps-input"),
+    fpsReadout: document.getElementById("fps-readout"),
     messages: document.getElementById("messages"),
     parseStatus: document.getElementById("parse-status"),
-    summaryTable: document.getElementById("summary-table"),
     runMeta: document.getElementById("run-meta"),
-    chartMeta: document.getElementById("chart-meta"),
-    histogram: document.getElementById("histogram"),
-    traceList: document.getElementById("trace-list"),
-    instructionSelect: document.getElementById("instruction-select"),
-    stateSnapshot: document.getElementById("state-snapshot"),
+    outputMeta: document.getElementById("output-meta"),
     stateCaption: document.getElementById("state-caption"),
-    playbackMeta: document.getElementById("playback-meta"),
-    pythonPreview: document.getElementById("python-preview"),
+    stateSnapshot: document.getElementById("state-snapshot"),
+    outputChart: document.getElementById("output-chart"),
   };
 
   let lastProgram = null;
-  let lastResults = null;
+  let simulation = null;
   let playbackTimer = 0;
 
   function init() {
@@ -130,35 +135,30 @@ position_out:
       nodes.exampleSelect.appendChild(option);
     });
 
-    nodes.exampleSelect.addEventListener("change", () => loadExample(nodes.exampleSelect.value));
-    nodes.runButton.addEventListener("click", runCurrentProgram);
-    nodes.editor.addEventListener("input", debounce(() => {
-      updateParsePreview();
-      runCurrentProgram();
-    }, 240));
-    nodes.chartVariable.addEventListener("change", renderCurrentHistogram);
-    nodes.instructionSelect.addEventListener("change", () => {
-      stopPlayback();
-      renderInstructionSnapshot(Number(nodes.instructionSelect.value || 0));
+    nodes.exampleSelect.addEventListener("change", () => loadExample(nodes.exampleSelect.value, true));
+    nodes.playButton.addEventListener("click", play);
+    nodes.pauseButton.addEventListener("click", pause);
+    nodes.editor.addEventListener("input", debounce(() => resetSimulation(false), 240));
+    nodes.runs.addEventListener("change", () => resetSimulation(false));
+    nodes.seed.addEventListener("change", () => resetSimulation(false));
+    nodes.fps.addEventListener("input", () => {
+      renderFps();
+      if (playbackTimer) {
+        pause();
+        play();
+      }
     });
-    nodes.playbackSpeed.addEventListener("change", () => {
-      if (lastResults) startPlayback();
-    });
-    nodes.runs.addEventListener("change", runCurrentProgram);
-    nodes.steps.addEventListener("change", runCurrentProgram);
-    nodes.seed.addEventListener("change", runCurrentProgram);
 
-    loadExample("Coin flips");
+    loadExample("Coin flips", true);
   }
 
-  function loadExample(name) {
+  function loadExample(name, autoplay) {
     const example = examples[name];
     nodes.editor.value = example.source;
     nodes.runs.value = example.runs;
-    nodes.steps.value = example.steps;
-    nodes.playbackSpeed.value = example.playback || "650";
-    updateParsePreview(example.chart);
-    runCurrentProgram(example.chart);
+    nodes.fps.value = example.fps;
+    renderFps();
+    resetSimulation(autoplay);
   }
 
   function debounce(fn, delay) {
@@ -175,12 +175,10 @@ position_out:
     return Math.min(max, Math.max(min, value));
   }
 
-  function updateParsePreview(preferredChart) {
+  function parseCurrentProgram() {
     const program = W.parseProgram(nodes.editor.value);
     lastProgram = program;
     renderMessages(program);
-    renderPython(program);
-    updateVariableSelect(program, preferredChart);
 
     if (program.errors.length > 0) {
       nodes.parseStatus.textContent = `${program.errors.length} error${program.errors.length === 1 ? "" : "s"}`;
@@ -189,58 +187,132 @@ position_out:
       nodes.parseStatus.textContent = `${program.warnings.length} warning${program.warnings.length === 1 ? "" : "s"}`;
       nodes.parseStatus.className = "status-pill warn";
     } else {
-      nodes.parseStatus.textContent = `${program.drawableLabels.length} drawable`;
+      nodes.parseStatus.textContent = `${program.outputNames.length} output${program.outputNames.length === 1 ? "" : "s"}, ${program.drawableLabels.length} drawable`;
       nodes.parseStatus.className = "status-pill";
     }
     return program;
   }
 
-  function runCurrentProgram(preferredChart) {
-    stopPlayback();
-    const program = updateParsePreview(preferredChart);
-    if (program.errors.length > 0) {
-      lastResults = null;
-      clearResults();
+  function resetSimulation(autoplay) {
+    pause();
+    simulation = null;
+    const program = parseCurrentProgram();
+    clearOutput();
+
+    if (program.errors.length > 0) return;
+
+    const totalRuns = clampNumber(nodes.runs, 20, 1, 50000);
+    nodes.runs.value = totalRuns;
+    simulation = {
+      program,
+      totalRuns,
+      seed: nodes.seed.value,
+      completed: [],
+      currentRunIndex: 0,
+      currentRun: null,
+      frameIndex: 0,
+      complete: false,
+    };
+
+    loadRun(0);
+    renderCurrentFrame();
+    drawOutputChart();
+    if (autoplay) play();
+  }
+
+  function loadRun(index) {
+    if (!simulation || index >= simulation.totalRuns) return;
+    simulation.currentRunIndex = index;
+    simulation.frameIndex = 0;
+    simulation.currentRun = W.runOne(simulation.program, {
+      seedNumber: W.seedForRun(simulation.seed, index),
+      traceLimit: 120,
+      instructionTraceLimit: 2000,
+      safetySteps: 10000,
+    });
+  }
+
+  function play() {
+    if (!simulation) resetSimulation(false);
+    if (simulation && simulation.complete) resetSimulation(false);
+    if (!simulation || playbackTimer) return;
+    nodes.playButton.disabled = true;
+    nodes.pauseButton.disabled = false;
+    playbackTimer = window.setInterval(tick, frameDelay());
+  }
+
+  function pause() {
+    if (playbackTimer) window.clearInterval(playbackTimer);
+    playbackTimer = 0;
+    nodes.playButton.disabled = false;
+    nodes.pauseButton.disabled = true;
+  }
+
+  function tick() {
+    if (!simulation || !simulation.currentRun) {
+      pause();
       return;
     }
 
-    const runs = clampNumber(nodes.runs, 1000, 1, 50000);
-    const steps = clampNumber(nodes.steps, 100, 0, 100000);
-    nodes.runs.value = runs;
-    nodes.steps.value = steps;
-
-    try {
-      lastResults = W.runMany(program, {
-        runs,
-        maxSteps: steps,
-        seed: nodes.seed.value,
-      });
-      renderSummary(program, lastResults);
-      renderTrace(lastResults.firstRun);
-      renderInstructionTimeline(lastResults.firstRun);
-      renderCurrentHistogram();
-      nodes.runMeta.textContent = `${runs.toLocaleString()} run${runs === 1 ? "" : "s"} x ${steps.toLocaleString()} step cap`;
-      startPlayback();
-    } catch (error) {
-      showRuntimeError(error);
-      clearResults();
+    const frames = simulation.currentRun.instructionTrace;
+    if (simulation.frameIndex < frames.length - 1) {
+      simulation.frameIndex += 1;
+      renderCurrentFrame();
+      return;
     }
+
+    finishCurrentRun();
+  }
+
+  function finishCurrentRun() {
+    if (!simulation || !simulation.currentRun) return;
+    simulation.completed.push(simulation.currentRun);
+    drawOutputChart();
+
+    const nextRun = simulation.currentRunIndex + 1;
+    if (nextRun >= simulation.totalRuns) {
+      nodes.runMeta.textContent = `Complete: ${simulation.totalRuns.toLocaleString()} run${simulation.totalRuns === 1 ? "" : "s"}`;
+      simulation.complete = true;
+      pause();
+      return;
+    }
+
+    loadRun(nextRun);
+    renderCurrentFrame();
+  }
+
+  function frameDelay() {
+    return 1000 / Math.max(1, Number(nodes.fps.value) || 1);
+  }
+
+  function renderFps() {
+    const fps = Math.max(1, Number(nodes.fps.value) || 1);
+    nodes.fpsReadout.textContent = `${fps} FPS`;
+  }
+
+  function renderCurrentFrame() {
+    if (!simulation || !simulation.currentRun) return;
+    const frames = simulation.currentRun.instructionTrace;
+    const entry = frames[Math.min(simulation.frameIndex, frames.length - 1)];
+    if (!entry) return;
+
+    nodes.runMeta.textContent = `Run ${(simulation.currentRunIndex + 1).toLocaleString()} of ${simulation.totalRuns.toLocaleString()}`;
+    nodes.stateCaption.textContent = entry.index === 0
+      ? `Run ${simulation.currentRunIndex + 1}: initial state`
+      : `Run ${simulation.currentRunIndex + 1}, draw ${entry.step}: ${entry.drawn}`;
+    renderStateUrns(entry.state, simulation.program.outputNames);
   }
 
   function renderMessages(program) {
     nodes.messages.replaceChildren();
     program.errors.forEach((error) => {
-      nodes.messages.appendChild(messageNode("error", `Line ${error.line}: ${error.message}`));
+      const prefix = error.line ? `Line ${error.line}: ` : "";
+      nodes.messages.appendChild(messageNode("error", `${prefix}${error.message}`));
     });
     program.warnings.forEach((warning) => {
-      nodes.messages.appendChild(messageNode("warn", `Line ${warning.line}: ${warning.message}`));
+      const prefix = warning.line ? `Line ${warning.line}: ` : "";
+      nodes.messages.appendChild(messageNode("warn", `${prefix}${warning.message}`));
     });
-  }
-
-  function showRuntimeError(error) {
-    nodes.messages.replaceChildren(messageNode("error", error.message || String(error)));
-    nodes.parseStatus.textContent = "Runtime error";
-    nodes.parseStatus.className = "status-pill error";
   }
 
   function messageNode(kind, text) {
@@ -250,92 +322,82 @@ position_out:
     return node;
   }
 
-  function updateVariableSelect(program, preferredChart) {
-    const selected = preferredChart || nodes.chartVariable.value;
-    const outputNames = program.slots.filter((slot) => slot.output).map((slot) => slot.name);
-    const names = unique(outputNames.concat(program.slots.map((slot) => slot.name))).sort();
-    nodes.chartVariable.replaceChildren();
-    names.forEach((name) => {
-      const option = document.createElement("option");
-      option.value = name;
-      option.textContent = name;
-      nodes.chartVariable.appendChild(option);
+  function clearOutput() {
+    nodes.runMeta.textContent = "";
+    nodes.outputMeta.textContent = "";
+    nodes.stateCaption.textContent = "";
+    nodes.stateSnapshot.replaceChildren();
+    drawEmptyOutputChart("No completed runs");
+  }
+
+  function renderStateUrns(state, outputNames) {
+    nodes.stateSnapshot.replaceChildren();
+    outputNames.forEach((name, index) => {
+      nodes.stateSnapshot.appendChild(createUrnNode(name, Number(state[name] || 0), index));
     });
-    if (names.includes(selected)) {
-      nodes.chartVariable.value = selected;
-    } else if (outputNames.length > 0) {
-      nodes.chartVariable.value = outputNames[0];
-    } else if (names.length > 0) {
-      nodes.chartVariable.value = names[0];
+  }
+
+  function createUrnNode(name, value, index) {
+    const node = document.createElement("section");
+    node.className = `urn-column unlabeled${value < 0 ? " negative" : ""}`;
+    node.setAttribute("aria-label", `${name} equals ${formatNumber(value)}`);
+    node.title = `${name}: ${formatNumber(value)}`;
+
+    const stack = document.createElement("div");
+    stack.className = "urn-stack";
+
+    const magnitude = Number.isInteger(value) ? Math.abs(value) : Math.floor(Math.abs(value));
+    const visibleCount = Math.min(magnitude, 28);
+    const overflow = magnitude - visibleCount;
+    if (overflow > 0) {
+      const overflowNode = document.createElement("span");
+      overflowNode.className = "urn-overflow";
+      overflowNode.textContent = `+${formatNumber(overflow)}`;
+      stack.appendChild(overflowNode);
     }
+    for (let ball = 0; ball < visibleCount; ball += 1) {
+      const circle = document.createElement("span");
+      circle.className = "urn-ball";
+      circle.style.backgroundColor = outputColor(index);
+      circle.style.borderColor = shadeColor(outputColor(index), -22);
+      stack.appendChild(circle);
+    }
+    if (visibleCount === 0) {
+      const empty = document.createElement("span");
+      empty.className = "urn-empty";
+      stack.appendChild(empty);
+    }
+
+    node.appendChild(stack);
+    return node;
   }
 
-  function unique(values) {
-    return Array.from(new Set(values));
-  }
-
-  function renderSummary(program, runSet) {
-    const outputNames = program.slots.filter((slot) => slot.output).map((slot) => slot.name);
-    const preferred = outputNames.length > 0 ? outputNames : program.slots.map((slot) => slot.name);
-    const rows = preferred.map((name) => {
-      const stat = runSet.stats[name] || { mean: 0, min: 0, max: 0, final: 0 };
-      return `<tr>
-        <td>${escapeHtml(name)}</td>
-        <td>${formatNumber(stat.mean)}</td>
-        <td>${formatNumber(stat.min)}</td>
-        <td>${formatNumber(stat.max)}</td>
-        <td>${formatNumber(stat.final)}</td>
-      </tr>`;
-    }).join("");
-
-    nodes.summaryTable.innerHTML = `<table>
-      <thead>
-        <tr>
-          <th>Value</th>
-          <th>Mean</th>
-          <th>Min</th>
-          <th>Max</th>
-          <th>Run 1</th>
-        </tr>
-      </thead>
-      <tbody>${rows || `<tr><td colspan="5">No state slots</td></tr>`}</tbody>
-    </table>`;
-  }
-
-  function renderCurrentHistogram() {
-    if (!lastResults) {
-      drawEmptyChart("No results");
+  function drawOutputChart() {
+    if (!simulation || simulation.completed.length === 0) {
+      drawEmptyOutputChart("No completed runs");
       return;
     }
-    const variable = nodes.chartVariable.value;
-    const buckets = W.histogram(lastResults.results, variable);
-    drawHistogram(buckets, variable, lastResults.results.length);
-  }
 
-  function drawHistogram(buckets, variable, runCount) {
-    const canvas = nodes.histogram;
+    const canvas = nodes.outputChart;
     const ctx = canvas.getContext("2d");
     const width = canvas.width;
     const height = canvas.height;
-    const inset = { left: 54, right: 18, top: 22, bottom: 42 };
+    const inset = { left: 42, right: 18, top: 20, bottom: 36 };
     const plotWidth = width - inset.left - inset.right;
     const plotHeight = height - inset.top - inset.bottom;
+    const outputNames = simulation.program.outputNames;
+    const visibleRuns = simulation.completed.slice(-180);
+    const stacks = visibleRuns.map((run) => outputNames.map((name) => Number(run.outputs[name] || 0)));
+    const posMax = Math.max(1, ...stacks.map((values) => values.filter((value) => value > 0).reduce((sum, value) => sum + value, 0)));
+    const negMin = Math.min(0, ...stacks.map((values) => values.filter((value) => value < 0).reduce((sum, value) => sum + value, 0)));
+    const totalRange = Math.max(1, posMax - negMin);
+    const baseline = inset.top + (posMax / totalRange) * plotHeight;
+    const barGap = stacks.length > 80 ? 1 : 3;
+    const barWidth = Math.max(2, (plotWidth - barGap * Math.max(0, stacks.length - 1)) / stacks.length);
 
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);
-
-    if (!buckets.length) {
-      drawEmptyChart("No buckets");
-      return;
-    }
-
-    const maxCount = Math.max.apply(null, buckets.map((bucket) => bucket.count));
-    const compactBars = buckets.length < 8;
-    const barGap = compactBars ? 0 : buckets.length > 24 ? 2 : 6;
-    const slotWidth = compactBars ? plotWidth / buckets.length : (plotWidth - barGap * Math.max(0, buckets.length - 1)) / buckets.length;
-    const barWidth = compactBars ? Math.min(84, slotWidth * 0.58) : Math.max(2, slotWidth);
-
     ctx.strokeStyle = "#d8dee8";
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -343,41 +405,42 @@ position_out:
     ctx.lineTo(inset.left, inset.top + plotHeight);
     ctx.lineTo(inset.left + plotWidth, inset.top + plotHeight);
     ctx.stroke();
+    ctx.strokeStyle = "#94a3b8";
+    ctx.beginPath();
+    ctx.moveTo(inset.left, baseline);
+    ctx.lineTo(inset.left + plotWidth, baseline);
+    ctx.stroke();
 
-    buckets.forEach((bucket, index) => {
-      const x = compactBars
-        ? inset.left + index * slotWidth + (slotWidth - barWidth) / 2
-        : inset.left + index * (barWidth + barGap);
-      const h = maxCount ? (bucket.count / maxCount) * plotHeight : 0;
-      const y = inset.top + plotHeight - h;
-      ctx.fillStyle = index % 2 === 0 ? "#0f766e" : "#2563eb";
-      ctx.fillRect(x, y, barWidth, h);
+    stacks.forEach((values, runIndex) => {
+      const x = inset.left + runIndex * (barWidth + barGap);
+      let positiveY = baseline;
+      let negativeY = baseline;
+      values.forEach((value, outputIndex) => {
+        const heightForValue = Math.abs(value) / totalRange * plotHeight;
+        ctx.fillStyle = outputColor(outputIndex);
+        if (value >= 0) {
+          positiveY -= heightForValue;
+          ctx.fillRect(x, positiveY, barWidth, heightForValue);
+        } else {
+          ctx.fillRect(x, negativeY, barWidth, heightForValue);
+          negativeY += heightForValue;
+        }
+      });
     });
 
     ctx.fillStyle = "#687386";
-    ctx.font = "18px system-ui, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(variable, inset.left, 18);
     ctx.font = "13px system-ui, sans-serif";
     ctx.textAlign = "right";
-    ctx.fillText(String(maxCount), inset.left - 8, inset.top + 4);
-    ctx.fillText("0", inset.left - 8, inset.top + plotHeight + 4);
-
+    ctx.fillText(formatNumber(posMax), inset.left - 8, inset.top + 5);
+    if (negMin < 0) ctx.fillText(formatNumber(negMin), inset.left - 8, inset.top + plotHeight);
     ctx.textAlign = "center";
-    const labelEvery = Math.max(1, Math.ceil(buckets.length / 10));
-    buckets.forEach((bucket, index) => {
-      if (index % labelEvery !== 0 && index !== buckets.length - 1) return;
-      const x = compactBars
-        ? inset.left + index * slotWidth + slotWidth / 2
-        : inset.left + index * (barWidth + barGap) + barWidth / 2;
-      ctx.fillText(bucket.value, x, inset.top + plotHeight + 22);
-    });
+    ctx.fillText(String(simulation.completed.length), inset.left + plotWidth, inset.top + plotHeight + 24);
 
-    nodes.chartMeta.textContent = `${buckets.length} bucket${buckets.length === 1 ? "" : "s"} from ${runCount.toLocaleString()} run${runCount === 1 ? "" : "s"}`;
+    nodes.outputMeta.textContent = `${simulation.completed.length.toLocaleString()} of ${simulation.totalRuns.toLocaleString()} complete`;
   }
 
-  function drawEmptyChart(text) {
-    const canvas = nodes.histogram;
+  function drawEmptyOutputChart(text) {
+    const canvas = nodes.outputChart;
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = "#ffffff";
@@ -386,178 +449,18 @@ position_out:
     ctx.font = "16px system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText(text, canvas.width / 2, canvas.height / 2);
-    nodes.chartMeta.textContent = "";
   }
 
-  function renderTrace(firstRun) {
-    nodes.traceList.replaceChildren();
-    if (!firstRun || firstRun.trace.length === 0) {
-      const item = document.createElement("li");
-      item.textContent = firstRun ? `Stopped: ${firstRun.reason}` : "No trace";
-      nodes.traceList.appendChild(item);
-      return;
-    }
-
-    firstRun.trace.slice(0, 60).forEach((entry) => {
-      const item = document.createElement("li");
-      const changes = entry.changes.length
-        ? entry.changes.map((change) => `${change.name}: ${formatNumber(change.before)} -> ${formatNumber(change.after)}`).join(", ")
-        : "no state change";
-      item.innerHTML = `<span class="trace-draw">${entry.step}. ${escapeHtml(entry.drawn)}</span><br><span class="trace-change">${escapeHtml(changes)}</span>`;
-      nodes.traceList.appendChild(item);
-    });
-
-    const final = document.createElement("li");
-    final.textContent = `Stopped: ${firstRun.reason} after ${firstRun.steps} step${firstRun.steps === 1 ? "" : "s"}`;
-    nodes.traceList.appendChild(final);
+  function outputColor(index) {
+    return OUTPUT_COLORS[index % OUTPUT_COLORS.length];
   }
 
-  function renderInstructionTimeline(firstRun) {
-    const snapshots = firstRun && firstRun.instructionTrace ? firstRun.instructionTrace : [];
-    nodes.instructionSelect.replaceChildren();
-
-    snapshots.forEach((entry, index) => {
-      const option = document.createElement("option");
-      option.value = String(index);
-      option.textContent = formatInstructionOption(entry);
-      nodes.instructionSelect.appendChild(option);
-    });
-
-    if (snapshots.length === 0) {
-      nodes.stateCaption.textContent = "No instruction snapshots";
-      nodes.stateSnapshot.replaceChildren();
-      nodes.playbackMeta.textContent = "";
-      return;
-    }
-
-    nodes.playbackMeta.textContent = `${snapshots.length} snapshot${snapshots.length === 1 ? "" : "s"}`;
-    renderInstructionSnapshot(0);
-  }
-
-  function formatInstructionOption(entry) {
-    if (entry.index === 0) return "0. initial state";
-    const line = entry.line ? `line ${entry.line}` : "line ?";
-    return `${entry.index}. draw ${entry.step} ${entry.drawn} (${line})`;
-  }
-
-  function renderInstructionSnapshot(index) {
-    if (!lastResults || !lastResults.firstRun) return;
-    const snapshots = lastResults.firstRun.instructionTrace || [];
-    const entry = snapshots[Math.max(0, Math.min(index, snapshots.length - 1))];
-    if (!entry) return;
-
-    nodes.instructionSelect.value = String(entry.index);
-    nodes.stateCaption.textContent = entry.index === 0
-      ? "Initial state before any draw."
-      : `Draw ${entry.step}: ${entry.drawn}, line ${entry.line}, ${entry.statement}`;
-    renderStateUrns(entry.state);
-  }
-
-  function renderStateUrns(state) {
-    nodes.stateSnapshot.replaceChildren();
-    getStateNames(state).forEach((name) => {
-      nodes.stateSnapshot.appendChild(createUrnNode(name, Number(state[name] || 0)));
-    });
-  }
-
-  function getStateNames(state) {
-    const programNames = lastProgram ? lastProgram.slots.map((slot) => slot.name) : [];
-    return unique(programNames.concat(Object.keys(state))).filter((name) => Object.prototype.hasOwnProperty.call(state, name));
-  }
-
-  function createUrnNode(name, value) {
-    const node = document.createElement("section");
-    node.className = `urn-column${name.endsWith("_out") ? " output" : ""}${value < 0 ? " negative" : ""}`;
-    node.setAttribute("aria-label", `${name} equals ${formatNumber(value)}`);
-
-    const stack = document.createElement("div");
-    stack.className = "urn-stack";
-
-    const magnitude = Number.isInteger(value) ? Math.abs(value) : Math.floor(Math.abs(value));
-    const visibleCount = Math.min(magnitude, 24);
-    const overflow = magnitude - visibleCount;
-    if (overflow > 0) {
-      const overflowNode = document.createElement("span");
-      overflowNode.className = "urn-overflow";
-      overflowNode.textContent = `+${formatNumber(overflow)}`;
-      stack.appendChild(overflowNode);
-    }
-    for (let index = 0; index < visibleCount; index += 1) {
-      const circle = document.createElement("span");
-      circle.className = "urn-ball";
-      stack.appendChild(circle);
-    }
-    if (visibleCount === 0) {
-      const empty = document.createElement("span");
-      empty.className = "urn-empty";
-      empty.textContent = "0";
-      stack.appendChild(empty);
-    }
-    if (!Number.isInteger(value)) {
-      const fractional = document.createElement("span");
-      fractional.className = "urn-fractional";
-      fractional.textContent = formatNumber(value);
-      stack.appendChild(fractional);
-    }
-
-    const label = document.createElement("div");
-    label.className = "urn-label";
-    label.textContent = name;
-
-    const count = document.createElement("div");
-    count.className = "urn-count";
-    count.textContent = formatNumber(value);
-
-    node.appendChild(stack);
-    node.appendChild(label);
-    node.appendChild(count);
-    return node;
-  }
-
-  function startPlayback() {
-    stopPlayback();
-    const firstRun = lastResults && lastResults.firstRun;
-    const snapshots = firstRun && firstRun.instructionTrace ? firstRun.instructionTrace : [];
-    if (snapshots.length === 0) return;
-
-    const delay = Math.max(0, Number(nodes.playbackSpeed.value) || 0);
-    if (delay === 0 || snapshots.length === 1) {
-      renderInstructionSnapshot(snapshots.length - 1);
-      return;
-    }
-
-    let index = 0;
-    renderInstructionSnapshot(index);
-    playbackTimer = window.setInterval(() => {
-      index += 1;
-      renderInstructionSnapshot(index);
-      if (index >= snapshots.length - 1) stopPlayback();
-    }, delay);
-  }
-
-  function stopPlayback() {
-    if (!playbackTimer) return;
-    window.clearInterval(playbackTimer);
-    playbackTimer = 0;
-  }
-
-  function renderPython(program) {
-    if (program.errors.length > 0) {
-      nodes.pythonPreview.textContent = "# Fix parse errors to generate Python.";
-      return;
-    }
-    nodes.pythonPreview.textContent = W.compileToPython(program);
-  }
-
-  function clearResults() {
-    nodes.summaryTable.innerHTML = "";
-    nodes.runMeta.textContent = "";
-    nodes.traceList.replaceChildren();
-    nodes.instructionSelect.replaceChildren();
-    nodes.stateCaption.textContent = "";
-    nodes.stateSnapshot.replaceChildren();
-    nodes.playbackMeta.textContent = "";
-    drawEmptyChart("No results");
+  function shadeColor(hex, amount) {
+    const value = Number.parseInt(hex.replace("#", ""), 16);
+    const r = Math.max(0, Math.min(255, (value >> 16) + amount));
+    const g = Math.max(0, Math.min(255, ((value >> 8) & 255) + amount));
+    const b = Math.max(0, Math.min(255, (value & 255) + amount));
+    return `rgb(${r}, ${g}, ${b})`;
   }
 
   function escapeHtml(text) {

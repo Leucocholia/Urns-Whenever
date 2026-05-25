@@ -1,30 +1,41 @@
 # Whichever Lab
 
-A small static MVP for experimenting with Whichever, an urn-based cousin of Whenever.
+A small static app for experimenting with Whichever, an urn-based cousin of Whenever.
 
 Open `index.html` in a browser to run the app. No install step is required.
 
-## Whichever v0.1
+## Whichever v0.2
 
-State is a set of named numeric slots. A top-level label creates a slot and can also define draw behavior:
+State is a set of named numeric slots. Presets and outputs are declared separately from the instruction labels.
 
 ```whichever
-heads:
-  preset 1
-  heads_out += 1
+presets:
+  left: 1
+  right: 1
+  position: 0
+
+outputs:
+  position
+
+left:
+  position -= 1
+
+right:
+  position += 1
+
+run_for 40
 ```
 
 Rules:
 
-- `preset N` initializes the label or output slot.
-- A label is drawable only if it has executable statements besides `preset`.
-- Draw probability is proportional to the current value of each drawable label.
+- `presets:` is required and initializes every state slot with `name: expr`.
+- `outputs:` is required and lists the variables to visualize, in display order.
+- A label is drawable when it has executable statements and its current value is positive.
+- Draw probability is proportional to each drawable label's current value.
 - Drawing a label does not implicitly decrement it.
 - Statements under the drawn label run atomically.
-- Labels ending in `_out`, and slots declared under `output:`, are treated as output values.
-- `run_until (expr)` stops before the next draw when the condition is true.
-- If there is no `run_until`, the UI's step cap controls run length.
-- The app records an initial state snapshot plus one exact state snapshot after every executed instruction in the first run, rendered as urn columns with stacked balls.
+- Every program must end with exactly one stopping clause: `run_for N` or `run_until (expr)`.
+- The app records an initial state snapshot plus one exact state snapshot after every executed instruction.
 
 Supported statements:
 
@@ -45,41 +56,51 @@ Expressions support numbers, state names, `+ - * / %`, comparisons, `&& || !`, p
 
 ## Simulation UI
 
-The default coin-flip example runs once and plays the first run at human speed. Increase `Runs` to collect a distribution, or switch `Playback` to `Instant` to jump directly to the final state snapshot. The State panel renders each value as a vertical stack of balls, with compact overflow markers for large counts.
+The output interface is a small playback surface:
+
+- Play and pause buttons with an FPS slider.
+- An unlabeled circle-stack view of the current run's output variables, ordered exactly as listed in `outputs:`.
+- A stacked bar chart that updates after every completed run, with one bar per run and one stacked segment per output variable.
 
 ## Examples
 
 Ten fair coin flips:
 
 ```whichever
+presets:
+  heads: 1
+  tails: 1
+  heads_out: 0
+  tails_out: 0
+
+outputs:
+  heads_out
+  tails_out
+
 heads:
-  preset 1
   heads_out += 1
 
 tails:
-  preset 1
   tails_out += 1
 
-heads_out:
-  preset 0
-
-tails_out:
-  preset 0
+run_for 10
 ```
 
 Fifth Fibonacci number:
 
 ```whichever
+presets:
+  n_left: 5
+  a: 0
+  b: 1
+
+outputs:
+  a
+  b
+
 n_left:
-  preset 5
   n_left -= 1
   (a, b) = (b, a + b)
-
-a:
-  preset 0
-
-b:
-  preset 1
 
 run_until (n_left == 0)
 ```

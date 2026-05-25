@@ -124,6 +124,25 @@ input {
   background: var(--teal-dark);
 }
 
+.primary-button:disabled,
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.secondary-button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 800;
+  padding: 0 16px;
+}
+
 .workspace {
   flex: 1;
   display: grid;
@@ -220,9 +239,25 @@ code {
 
 .controls-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(110px, 1fr));
+  grid-template-columns: minmax(100px, 0.8fr) minmax(140px, 1.2fr) minmax(140px, 1fr) minmax(72px, 0.5fr) minmax(160px, 1fr);
   gap: 10px;
+  align-items: end;
   margin-bottom: 12px;
+}
+
+.fps-readout {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.playback-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 .messages {
@@ -262,7 +297,8 @@ code {
 }
 
 .summary-panel,
-.chart-panel {
+.chart-panel,
+.outputs-panel {
   min-height: 280px;
 }
 
@@ -270,10 +306,6 @@ code {
 .python-panel,
 .state-panel {
   min-height: 230px;
-}
-
-.state-panel {
-  grid-column: 1 / -1;
 }
 
 .subtle {
@@ -328,10 +360,11 @@ th {
   letter-spacing: 0;
 }
 
-#histogram {
+#histogram,
+#output-chart {
   display: block;
   width: 100%;
-  height: 280px;
+  height: 340px;
   padding: 10px;
 }
 
@@ -375,8 +408,8 @@ th {
 }
 
 .state-caption {
-  align-self: end;
   min-height: 38px;
+  margin: 12px 14px 0;
   display: flex;
   align-items: center;
   border: 1px solid var(--soft-line);
@@ -389,10 +422,10 @@ th {
 }
 
 .urn-state {
-  min-height: 210px;
-  max-height: 330px;
+  min-height: 290px;
+  max-height: 380px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
   gap: 12px;
   overflow: auto;
   margin: 12px 14px 14px;
@@ -405,7 +438,7 @@ th {
 .urn-column {
   min-width: 0;
   display: grid;
-  grid-template-rows: 1fr auto auto;
+  grid-template-rows: 1fr;
   gap: 7px;
   justify-items: center;
   align-items: end;
@@ -413,6 +446,10 @@ th {
   border-radius: 8px;
   background: var(--paper);
   padding: 10px 8px;
+}
+
+.urn-column.unlabeled {
+  min-height: 230px;
 }
 
 .urn-column.output {
@@ -427,7 +464,7 @@ th {
 
 .urn-stack {
   width: 100%;
-  min-height: 132px;
+  min-height: 190px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -476,6 +513,14 @@ th {
   min-height: 28px;
   border-radius: 50%;
   padding: 0;
+}
+
+.urn-empty::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
 }
 
 .urn-fractional {

@@ -10,7 +10,7 @@
     <main class="app-shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Whichever v0.1</p>
+          <p class="eyebrow">Whichever v0.2</p>
           <h1>Urn programs, many outcomes</h1>
         </div>
         <div class="topbar-actions">
@@ -18,10 +18,6 @@
             Example
             <select id="example-select" aria-label="Example program"></select>
           </label>
-          <button id="run-button" class="primary-button" type="button" title="Run simulation">
-            <span aria-hidden="true">&gt;</span>
-            Run
-          </button>
         </div>
       </header>
 
@@ -33,88 +29,51 @@
           </div>
           <textarea id="source-editor" spellcheck="false" aria-label="Whichever source code"></textarea>
           <div class="semantics-strip">
-            <span>Drawable: labels with executable statements and positive value.</span>
-            <span>No implicit decrement.</span>
-            <span>Outputs: <code>_out</code> labels or <code>output:</code> slots.</span>
+            <span>Declare initial state in <code>presets:</code>.</span>
+            <span>Declare display order in <code>outputs:</code>.</span>
+            <span>Every program needs <code>run_for</code> or <code>run_until</code>.</span>
           </div>
         </section>
 
-        <section class="results-pane" aria-label="Simulation results">
+        <section class="results-pane" aria-label="Simulation output">
           <div class="controls-grid">
             <label>
               Runs
-              <input id="runs-input" type="number" min="1" max="50000" step="1" value="5000">
-            </label>
-            <label>
-              Steps per run
-              <input id="steps-input" type="number" min="0" max="100000" step="1" value="10">
+              <input id="runs-input" type="number" min="1" max="50000" step="1" value="20">
             </label>
             <label>
               Seed
               <input id="seed-input" type="text" value="whichever">
             </label>
             <label>
-              Chart value
-              <select id="chart-variable" aria-label="Chart variable"></select>
+              FPS
+              <input id="fps-input" type="range" min="1" max="30" step="1" value="2">
             </label>
-            <label>
-              Playback
-              <select id="playback-speed" aria-label="Playback speed">
-                <option value="650" selected>Human</option>
-                <option value="1200">Slow</option>
-                <option value="0">Instant</option>
-              </select>
-            </label>
+            <div class="fps-readout" id="fps-readout">2 FPS</div>
+            <div class="playback-buttons" aria-label="Playback controls">
+              <button id="play-button" class="primary-button" type="button">Play</button>
+              <button id="pause-button" class="secondary-button" type="button">Pause</button>
+            </div>
           </div>
 
           <div id="messages" class="messages" aria-live="polite"></div>
 
           <div class="results-grid">
-            <section class="panel summary-panel" aria-label="Summary">
+            <section class="panel state-panel" aria-label="Current run urn state">
               <div class="pane-heading">
-                <h2>Summary</h2>
+                <h2>Current Run</h2>
                 <span id="run-meta" class="subtle"></span>
               </div>
-              <div id="summary-table" class="table-wrap"></div>
-            </section>
-
-            <section class="panel chart-panel" aria-label="Distribution chart">
-              <div class="pane-heading">
-                <h2>Distribution</h2>
-                <span id="chart-meta" class="subtle"></span>
-              </div>
-              <canvas id="histogram" width="900" height="360" role="img" aria-label="Histogram of selected final value"></canvas>
-            </section>
-
-            <section class="panel state-panel" aria-label="Instruction state inspector">
-              <div class="pane-heading">
-                <h2>State</h2>
-                <span id="playback-meta" class="subtle">instruction snapshots</span>
-              </div>
-              <div class="state-tools">
-                <label>
-                  Instruction
-                  <select id="instruction-select" aria-label="Instruction snapshot"></select>
-                </label>
-                <div id="state-caption" class="state-caption"></div>
-              </div>
+              <div id="state-caption" class="state-caption"></div>
               <div id="state-snapshot" class="urn-state" aria-live="polite"></div>
             </section>
 
-            <section class="panel trace-panel" aria-label="First run trace">
+            <section class="panel outputs-panel" aria-label="Completed run outputs">
               <div class="pane-heading">
-                <h2>First Run</h2>
-                <span class="subtle">trace</span>
+                <h2>Output History</h2>
+                <span id="output-meta" class="subtle"></span>
               </div>
-              <ol id="trace-list" class="trace-list"></ol>
-            </section>
-
-            <section class="panel python-panel" aria-label="Python preview">
-              <div class="pane-heading">
-                <h2>Python Preview</h2>
-                <span class="subtle">generated</span>
-              </div>
-              <pre id="python-preview"></pre>
+              <canvas id="output-chart" width="900" height="420" role="img" aria-label="Stacked bar chart of output variables after completed runs"></canvas>
             </section>
           </div>
         </section>
